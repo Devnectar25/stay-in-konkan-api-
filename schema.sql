@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS properties (
     reviews_count INT DEFAULT 0,
     image_url TEXT,
     owner_id VARCHAR(255) REFERENCES users(id) ON DELETE SET NULL,
+    status VARCHAR(50) DEFAULT 'pending',
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
@@ -47,3 +48,19 @@ CREATE TABLE IF NOT EXISTS bookings (
     payment_status VARCHAR(50) DEFAULT 'pending',
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
+
+-- 4. Create Platform Config Table
+CREATE TABLE IF NOT EXISTS platform_config (
+    config_key VARCHAR(255) PRIMARY KEY,
+    config_value TEXT NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Seed Default Config & Admin User
+INSERT INTO platform_config (config_key, config_value) 
+VALUES ('token_percentage', '20')
+ON CONFLICT (config_key) DO NOTHING;
+
+INSERT INTO users (id, full_name, email, role, verified, provider)
+VALUES ('admin_01', 'Platform Administrator', 'admin@stayinkonkan.com', 'admin', true, 'email')
+ON CONFLICT (email) DO NOTHING;
