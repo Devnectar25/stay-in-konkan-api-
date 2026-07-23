@@ -157,37 +157,55 @@ router.get('/properties', async (req, res) => {
     console.warn('[Admin API] Properties DB fallback:', err.message);
     res.json({
       success: true,
-      count: 3,
+      count: 4,
       properties: [
         {
-          id: 'P101',
-          title: 'Beachfront Coconut Hut',
-          name: 'Beachfront Coconut Hut',
-          owner_name: 'Sanjay G.',
-          location: 'Tarkarli, Sindhudurg',
-          price_per_night: 1500,
-          status: 'pending',
-          created_at: new Date().toISOString()
-        },
-        {
-          id: 'P102',
-          title: 'Mango Farmstay',
-          name: 'Mango Farmstay',
-          owner_name: 'Sanjay G.',
-          location: 'Ratnagiri',
-          price_per_night: 2200,
-          status: 'live',
-          created_at: new Date().toISOString()
-        },
-        {
-          id: 'P103',
+          id: 'shree-ganesh',
           title: 'Shree Ganesh Homestay',
           name: 'Shree Ganesh Homestay',
-          owner_name: 'Anand G.',
-          location: 'Guhagar',
+          owner_name: 'Anand Sawant',
+          owner_email: 'anand.sawant@example.com',
+          location: 'Guhagar, Maharashtra • Near Beach',
           price_per_night: 1800,
           status: 'live',
-          created_at: new Date().toISOString()
+          type: 'homestay',
+          created_at: '2026-07-01'
+        },
+        {
+          id: 'mango-farmstay',
+          title: 'Mango Farmstay',
+          name: 'Mango Farmstay',
+          owner_name: 'Sanjay Kulkarni',
+          owner_email: 'sanjay.k@example.com',
+          location: 'Ratnagiri, Maharashtra • Orchard',
+          price_per_night: 2200,
+          status: 'live',
+          type: 'farmstay',
+          created_at: '2026-07-05'
+        },
+        {
+          id: 'sindhudurg-heritage',
+          title: 'Sindhudurg Heritage House',
+          name: 'Sindhudurg Heritage House',
+          owner_name: 'Ramesh & Sunita Wada',
+          owner_email: 'ramesh.wada@example.com',
+          location: 'Malvan, Maharashtra • Heritage',
+          price_per_night: 3500,
+          status: 'live',
+          type: 'heritage',
+          created_at: '2026-07-10'
+        },
+        {
+          id: 'beachfront-coconut',
+          title: 'Beachfront Coconut Hut',
+          name: 'Beachfront Coconut Hut',
+          owner_name: 'Kuldeep Mahajan',
+          owner_email: 'kuldeepmahajan@example.com',
+          location: 'Tarkarli, Maharashtra • Beachfront',
+          price_per_night: 1500,
+          status: 'pending',
+          type: 'beachfront',
+          created_at: '2026-07-15'
         }
       ]
     });
@@ -239,16 +257,26 @@ router.get('/users', async (req, res) => {
     const dbRes = await query('SELECT id, full_name, email, role, phone, verified, created_at FROM users ORDER BY created_at DESC');
     res.json({ success: true, count: dbRes.rows.length, users: dbRes.rows });
   } catch (err) {
-    console.warn('[Admin API] Users DB fallback:', err.message);
+    console.warn('[Admin API] Users DB query note:', err.message);
+    try {
+      const supabaseUrl = process.env.SUPABASE_URL;
+      const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+      if (supabaseUrl && supabaseKey) {
+        const resp = await fetch(`${supabaseUrl}/rest/v1/users?select=*`, {
+          headers: { 'apikey': supabaseKey, 'Authorization': `Bearer ${supabaseKey}` }
+        });
+        const liveUsers = await resp.json();
+        if (Array.isArray(liveUsers) && liveUsers.length > 0) {
+          return res.json({ success: true, count: liveUsers.length, users: liveUsers });
+        }
+      }
+    } catch (apiErr) {
+      console.warn('[Admin API] Supabase REST fetch note:', apiErr.message);
+    }
     res.json({
       success: true,
-      count: 4,
-      users: [
-        { id: 'usr_1', full_name: 'Sanjay G.', email: 'sanjay@example.com', role: 'host', verified: true, created_at: '2026-01-15' },
-        { id: 'usr_2', full_name: 'Anand G.', email: 'anand@example.com', role: 'host', verified: true, created_at: '2026-02-10' },
-        { id: 'usr_3', full_name: 'Priya Sharma', email: 'priya@example.com', role: 'guest', verified: true, created_at: '2026-03-05' },
-        { id: 'admin_01', full_name: 'Platform Administrator', email: 'admin@stayinkonkan.com', role: 'admin', verified: true, created_at: '2026-01-01' }
-      ]
+      count: 0,
+      users: []
     });
   }
 });
