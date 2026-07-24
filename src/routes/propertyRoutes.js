@@ -1,4 +1,5 @@
 import express from 'express';
+import crypto from 'crypto';
 import { query } from '../db.js';
 
 const router = express.Router();
@@ -30,7 +31,6 @@ router.get('/', async (req, res) => {
     return res.json({ success: true, count: result.rowCount, properties: result.rows });
   } catch (error) {
     console.error('Fetch properties error:', error);
-    // Return empty list if table not populated yet
     return res.json({ success: true, count: 0, properties: [], notice: 'Database table or connection pending' });
   }
 });
@@ -53,6 +53,62 @@ router.get('/:id', async (req, res) => {
     return res.json({ success: true, property: result.rows[0] });
   } catch (error) {
     console.error('Get property error:', error);
+    return res.status(500).json({ success: false, message: error.message || 'Database error' });
+  }
+});
+
+/**
+ * POST /api/properties
+ * Saves a new property listing to properties table in PostgreSQL
+ */
+router.post('/', async (req, res) => {
+  const { name, title, host, host_email, host_phone, location, price, type, description, image, rooms } = req.body;
+
+  if (!title && !name) {
+    return res.status(400).json({ success: false, message: 'Property name or title is required.' });
+  }
+
+  const uuid = crypto.randomUUID();
+  const propTitle = title || name;
+  const propName = name || title;
+
+  try {
+    const rawSql = `
+      INSERT INTO properties (
+        id, name, title, host, host_email, host_phone, location, price, type, 
+        status, image, description, rating, reviews_count, is_featured, created_at, updated_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NOW(), NOW())
+      RETURNING *;
+    `;
+
+    const params = [
+      uuid,
+      propName.trim(),
+      propTitle.trim(),
+      host ? host.trim() : 'Konkan Host',
+      host_email ? host_email.trim().toLowerCase() : null,
+      host_phone ? host_phone.trim() : null,
+      location ? location.trim() : 'Konkan',
+      price ? String(price) : '0',
+      type ? type.trim().toLowerCase() : 'homestay',
+      'active',
+      image || null,
+      description ? description.trim() : '',
+      '5.0',
+      0,
+      true
+    ];
+
+    const result = await query(rawSql, params);
+
+    return res.json({
+      success: true,
+      message: 'Property saved successfully to database!',
+      property: result.rows[0]
+    });
+  } catch (error) {
+    console.error('Property DB save error:', error);
     return res.status(500).json({ success: false, message: error.message || 'Database error' });
   }
 });

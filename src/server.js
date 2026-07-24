@@ -7,8 +7,12 @@ import bookingRoutes from './routes/bookingRoutes.js';
 import adminRoutes from './routes/adminRoutes.js';
 import newsletterRoutes from './routes/newsletterRoutes.js';
 import contactRoutes from './routes/contactRoutes.js';
+import hostApplicationRoutes from './routes/hostApplicationRoutes.js';
+import wishlistRoutes from './routes/wishlistRoutes.js';
+import reviewRoutes from './routes/reviewRoutes.js';
 
 dotenv.config();
+
 
 
 const app = express();
@@ -49,6 +53,10 @@ app.use('/api/bookings', bookingRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/newsletter', newsletterRoutes);
 app.use('/api/contact', contactRoutes);
+app.use('/api/host-applications', hostApplicationRoutes);
+app.use('/api/wishlists', wishlistRoutes);
+app.use('/api/reviews', reviewRoutes);
+
 
 
 // Global Error Handler
