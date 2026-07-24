@@ -20,6 +20,15 @@ app.use(cors({
 }));
 app.use(express.json());
 
+// Root Endpoint
+app.get('/', (req, res) => {
+  res.json({
+    status: 'OK',
+    message: '🚀 Stay in Konkan API is running live on Vercel!',
+    health: '/api/health'
+  });
+});
+
 // Health Check Endpoint
 app.get('/api/health', (req, res) => {
   res.json({
@@ -29,6 +38,7 @@ app.get('/api/health', (req, res) => {
     timestamp: new Date().toISOString()
   });
 });
+
 
 // API Routes
 app.use('/api/users', userRoutes);
