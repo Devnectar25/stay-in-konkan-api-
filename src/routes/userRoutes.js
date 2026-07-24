@@ -15,7 +15,8 @@ router.get('/check-email', async (req, res) => {
   }
 
   try {
-    const rawSql = `SELECT id, email, full_name, avatar_url, role, provider, verified FROM users WHERE LOWER(email) = LOWER($1)`;
+    const rawSql = `SELECT id, email, full_name, avatar_url, role, provider, verified, password_hash FROM users WHERE LOWER(email) = LOWER($1)`;
+
     const result = await query(rawSql, [email.trim()]);
 
     if (result.rows.length > 0) {
@@ -43,7 +44,7 @@ router.get('/check-email', async (req, res) => {
  * Raw query to insert or update user details upon registration / login / OAuth.
  */
 router.post('/sync', async (req, res) => {
-  const { id, full_name, email, avatar_url, phone, role, provider, verified } = req.body;
+  const { id, full_name, email, avatar_url, phone, role, provider, verified, password_hash, password } = req.body;
 
   if (!email) {
     return res.status(400).json({ success: false, message: 'Email is required' });
@@ -54,21 +55,26 @@ router.post('/sync', async (req, res) => {
   const userRole = role || 'guest';
   const userProvider = provider || 'email';
   const isVerified = verified !== undefined ? verified : false;
+  const passHash = password_hash || password || null;
 
   try {
+    // 1. Ensure password_hash column exists in users table
+    await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash TEXT;`);
+
     const rawSql = `
-      INSERT INTO users (id, full_name, email, avatar_url, phone, role, provider, verified, updated_at)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+      INSERT INTO users (id, full_name, email, avatar_url, phone, role, provider, verified, password_hash, updated_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
       ON CONFLICT (email) DO UPDATE SET
         full_name = EXCLUDED.full_name,
         avatar_url = COALESCE(EXCLUDED.avatar_url, users.avatar_url),
         phone = COALESCE(EXCLUDED.phone, users.phone),
         provider = EXCLUDED.provider,
         verified = EXCLUDED.verified,
+        password_hash = COALESCE(EXCLUDED.password_hash, users.password_hash),
         updated_at = NOW()
       RETURNING *;
     `;
-    const params = [userId, name, email.trim().toLowerCase(), avatar_url || null, phone || null, userRole, userProvider, isVerified];
+    const params = [userId, name, email.trim().toLowerCase(), avatar_url || null, phone || null, userRole, userProvider, isVerified, passHash];
     const result = await query(rawSql, params);
 
     return res.json({
@@ -81,6 +87,7 @@ router.post('/sync', async (req, res) => {
     return res.status(500).json({ success: false, message: error.message || 'Failed to sync user' });
   }
 });
+
 
 /**
  * GET /api/users/:id

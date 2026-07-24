@@ -1,4 +1,5 @@
 import express from 'express';
+import crypto from 'crypto';
 import { query } from '../db.js';
 
 const router = express.Router();
@@ -15,7 +16,8 @@ router.post('/', async (req, res) => {
   } = req.body;
 
   const finalBookingId = booking_id || id || `SIK-${Math.floor(100000 + Math.random() * 900000)}`;
-  const uuid = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+  const uuid = crypto.randomUUID();
+
 
   try {
     const rawSql = `

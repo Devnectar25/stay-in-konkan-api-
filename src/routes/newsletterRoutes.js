@@ -63,4 +63,25 @@ router.post('/subscribe', async (req, res) => {
   }
 });
 
+/**
+ * GET /api/newsletter/subscribers
+ * Returns list of stored newsletter subscribers from database
+ */
+router.get('/subscribers', async (req, res) => {
+  try {
+    await query(`
+      CREATE TABLE IF NOT EXISTS newsletter_subscribers (
+        id VARCHAR(255) PRIMARY KEY,
+        email VARCHAR(255) UNIQUE NOT NULL,
+        subscribed_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+      );
+    `);
+    const result = await query(`SELECT * FROM newsletter_subscribers ORDER BY subscribed_at DESC`);
+    return res.json({ success: true, count: result.rows.length, data: result.rows });
+  } catch (error) {
+    console.error('Fetch subscribers error:', error);
+    return res.status(500).json({ success: false, message: 'Failed to fetch subscribers' });
+  }
+});
+
 export default router;
