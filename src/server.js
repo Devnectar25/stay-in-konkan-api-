@@ -43,10 +43,16 @@ app.use((err, req, res, next) => {
   res.status(500).json({ success: false, message: err.message || 'Internal Server Error' });
 });
 
-// Start Server
-app.listen(PORT, () => {
-  console.log(`=================================================`);
-  console.log(`🚀 Stay in Konkan API running on http://localhost:${PORT}`);
-  console.log(`⚡ Database mode: Raw PostgreSQL queries (via pg)`);
-  console.log(`=================================================`);
-});
+// Export app for Vercel serverless deployment
+export default app;
+
+// Start Server (only when run directly in Node)
+if (process.env.NODE_ENV !== 'production') {
+  app.listen(PORT, () => {
+    console.log(`=================================================`);
+    console.log(`🚀 Stay in Konkan API running on http://localhost:${PORT}`);
+    console.log(`⚡ Database mode: Raw PostgreSQL queries (via pg)`);
+    console.log(`=================================================`);
+  });
+}
+
