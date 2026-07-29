@@ -64,3 +64,11 @@ ON CONFLICT (config_key) DO NOTHING;
 INSERT INTO users (id, full_name, email, role, verified, provider)
 VALUES ('admin_01', 'Platform Administrator', 'admin@stayinkonkan.com', 'admin', true, 'email')
 ON CONFLICT (email) DO NOTHING;
+
+-- 5. Create Newsletter Subscribers Table
+CREATE TABLE IF NOT EXISTS newsletter_subscribers (
+    id VARCHAR(255) PRIMARY KEY,
+    email VARCHAR(255) UNIQUE NOT NULL,
+    subscribed_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_newsletter_email ON newsletter_subscribers(email);

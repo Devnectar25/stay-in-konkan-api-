@@ -44,11 +44,21 @@ router.post('/subscribe', async (req, res) => {
 
     // 3. Insert subscriber into database
     const subscriberId = 'sub_' + Date.now() + '_' + Math.random().toString(36).substr(2, 4);
-    await query(`INSERT INTO newsletter_subscribers (id, email) VALUES ($1, $2)`, [subscriberId, cleanEmail]);
+    const insertResult = await query(
+      `INSERT INTO newsletter_subscribers (id, email) VALUES ($1, $2) RETURNING *`, 
+      [subscriberId, cleanEmail]
+    );
+
+    const newSubscriber = insertResult.rows[0] || {
+      id: subscriberId,
+      email: cleanEmail,
+      subscribed_at: new Date().toISOString()
+    };
 
     return res.json({
       success: true,
-      message: 'Thank you for subscribing to our newsletter! 🌿'
+      message: 'Thank you for subscribing to our newsletter! 🌿',
+      data: newSubscriber
     });
   } catch (error) {
     console.error('Newsletter subscription database error:', error);
@@ -81,6 +91,32 @@ router.get('/subscribers', async (req, res) => {
   } catch (error) {
     console.error('Fetch subscribers error:', error);
     return res.status(500).json({ success: false, message: 'Failed to fetch subscribers' });
+  }
+});
+
+/**
+ * DELETE /api/newsletter/subscribers/:id
+ * Removes subscriber from database by ID or Email
+ */
+router.delete('/subscribers/:id', async (req, res) => {
+  const { id } = req.params;
+  try {
+    await query(`
+      CREATE TABLE IF NOT EXISTS newsletter_subscribers (
+        id VARCHAR(255) PRIMARY KEY,
+        email VARCHAR(255) UNIQUE NOT NULL,
+        subscribed_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+      );
+    `);
+    const result = await query(`DELETE FROM newsletter_subscribers WHERE id = $1 OR LOWER(email) = LOWER($1) RETURNING *`, [id]);
+    return res.json({ 
+      success: true, 
+      message: 'Subscriber removed successfully',
+      deletedCount: result.rowCount 
+    });
+  } catch (error) {
+    console.error('Delete subscriber error:', error);
+    return res.status(500).json({ success: false, message: 'Failed to delete subscriber' });
   }
 });
 
