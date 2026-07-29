@@ -28,10 +28,10 @@ router.get('/', async (req, res) => {
     rawSql += ` ORDER BY created_at DESC`;
 
     const result = await query(rawSql, params);
-    return res.json({ success: true, count: result.rowCount, properties: result.rows });
+    return res.json({ success: true, count: result.rowCount, properties: result.rows, data: result.rows });
   } catch (error) {
     console.error('Fetch properties error:', error);
-    return res.json({ success: true, count: 0, properties: [], notice: 'Database table or connection pending' });
+    return res.json({ success: true, count: 0, properties: [], data: [], notice: 'Database table or connection pending' });
   }
 });
 
@@ -68,7 +68,7 @@ router.post('/', async (req, res) => {
     return res.status(400).json({ success: false, message: 'Property name or title is required.' });
   }
 
-  const uuid = crypto.randomUUID();
+  const propId = req.body.id || req.body.property_id || crypto.randomUUID();
   const propTitle = title || name;
   const propName = name || title;
 
@@ -83,7 +83,7 @@ router.post('/', async (req, res) => {
     `;
 
     const params = [
-      uuid,
+      propId,
       propName.trim(),
       propTitle.trim(),
       host ? host.trim() : 'Konkan Host',
@@ -92,7 +92,7 @@ router.post('/', async (req, res) => {
       location ? location.trim() : 'Konkan',
       price ? String(price) : '0',
       type ? type.trim().toLowerCase() : 'homestay',
-      'active',
+      req.body.status || 'pending',
       image || null,
       description ? description.trim() : '',
       '5.0',
