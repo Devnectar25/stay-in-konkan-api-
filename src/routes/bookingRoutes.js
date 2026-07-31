@@ -134,7 +134,7 @@ router.put('/:id/status', async (req, res) => {
 
   try {
     await query(
-      'UPDATE bookings SET status = $1 WHERE id = $2 OR booking_id = $2',
+      'UPDATE bookings SET status = $1 WHERE id = $2 OR booking_id = $2 OR payment_id = $2',
       [status, id]
     );
     return res.json({ success: true, message: `Booking ${id} status updated to ${status}.` });

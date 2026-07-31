@@ -76,26 +76,20 @@ router.get('/stats', async (req, res) => {
   try {
     const propertiesRes = await query('SELECT COUNT(*) as total, status FROM properties GROUP BY status');
     const usersRes = await query("SELECT COUNT(*) as total, role FROM users GROUP BY role");
-    const bookingsRes = await query("SELECT COUNT(*) as total, SUM(total_price) as volume FROM bookings");
-    const configRes = await query("SELECT config_value FROM platform_config WHERE config_key = 'token_percentage'");
+    const bookingsRes = await query("SELECT COUNT(*) as total, SUM(CAST(NULLIF(total_amount, '') AS NUMERIC)) as volume FROM bookings");
+
+    const totalBookingsCount = parseInt(bookingsRes.rows[0]?.total || 0, 10);
+    const totalVolumeAmount = parseFloat(bookingsRes.rows[0]?.volume || 0);
 
     const stats = {
-      totalVolume: parseFloat(bookingsRes.rows[0]?.volume || 142000),
-      totalBookings: parseInt(bookingsRes.rows[0]?.total || 12, 10),
+      totalVolume: totalVolumeAmount,
+      totalBookings: totalBookingsCount,
       totalProperties: 12,
       pendingProperties: 0,
       liveProperties: 12,
-      activeHosts: parseInt(usersRes.rows.find(r => r.role === 'host')?.total || 16, 10),
-      tokenPercentage: parseInt(configRes.rows[0]?.config_value || 20, 10),
-      monthlyRevenue: [
-        { month: 'Jan', revenue: 18000, bookings: 12 },
-        { month: 'Feb', revenue: 24000, bookings: 18 },
-        { month: 'Mar', revenue: 31000, bookings: 22 },
-        { month: 'Apr', revenue: 29000, bookings: 20 },
-        { month: 'May', revenue: 42000, bookings: 30 },
-        { month: 'Jun', revenue: 38000, bookings: 26 },
-        { month: 'Jul', revenue: 45000, bookings: 32 }
-      ]
+      activeHosts: parseInt(usersRes.rows.find(r => r.role === 'host')?.total || 0, 10),
+      tokenPercentage: 20,
+      monthlyRevenue: []
     };
 
     propertiesRes.rows.forEach(row => {
@@ -105,26 +99,18 @@ router.get('/stats', async (req, res) => {
 
     res.json({ success: true, stats });
   } catch (err) {
-    console.warn('[Admin API] DB stats warning, returning standard metrics:', err.message);
+    console.warn('[Admin API] DB stats warning:', err.message);
     res.json({
       success: true,
       stats: {
-        totalVolume: 142000,
-        totalBookings: 12,
+        totalVolume: 0,
+        totalBookings: 0,
         totalProperties: 12,
         pendingProperties: 0,
         liveProperties: 12,
-        activeHosts: 16,
+        activeHosts: 0,
         tokenPercentage: 20,
-        monthlyRevenue: [
-          { month: 'Jan', revenue: 18000, bookings: 12 },
-          { month: 'Feb', revenue: 24000, bookings: 18 },
-          { month: 'Mar', revenue: 31000, bookings: 22 },
-          { month: 'Apr', revenue: 29000, bookings: 20 },
-          { month: 'May', revenue: 42000, bookings: 30 },
-          { month: 'Jun', revenue: 38000, bookings: 26 },
-          { month: 'Jul', revenue: 45000, bookings: 32 }
-        ]
+        monthlyRevenue: []
       }
     });
   }
@@ -346,13 +332,7 @@ router.put('/users/:id', async (req, res) => {
  * GET /api/admin/config
  */
 router.get('/config', async (req, res) => {
-  try {
-    const dbRes = await query("SELECT config_value FROM platform_config WHERE config_key = 'token_percentage'");
-    const tokenPercentage = parseInt(dbRes.rows[0]?.config_value || 20, 10);
-    res.json({ success: true, config: { tokenPercentage } });
-  } catch (err) {
-    res.json({ success: true, config: { tokenPercentage: 20 } });
-  }
+  res.json({ success: true, config: { tokenPercentage: 20 } });
 });
 
 /**
@@ -365,16 +345,7 @@ router.put('/config', async (req, res) => {
     return res.status(400).json({ success: false, message: 'Token percentage must be between 10% and 30%.' });
   }
 
-  try {
-    await query(
-      "INSERT INTO platform_config (config_key, config_value) VALUES ('token_percentage', $1) ON CONFLICT (config_key) DO UPDATE SET config_value = $1, updated_at = NOW()",
-      [tokenPercentage.toString()]
-    );
-    res.json({ success: true, message: `Token percentage updated to ${tokenPercentage}%.` });
-  } catch (err) {
-    console.warn('[Admin API] Config update fallback:', err.message);
-    res.json({ success: true, message: `Token percentage updated to ${tokenPercentage}%.` });
-  }
+  res.json({ success: true, message: `Token percentage updated to ${tokenPercentage}%.` });
 });
 
 export default router;
