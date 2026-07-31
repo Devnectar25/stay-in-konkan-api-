@@ -28,7 +28,23 @@ router.get('/', async (req, res) => {
     rawSql += ` ORDER BY created_at DESC`;
 
     const result = await query(rawSql, params);
-    return res.json({ success: true, count: result.rowCount, properties: result.rows, data: result.rows });
+    const MASTER_12_IDS = [
+      'shree-ganesh',
+      'mango-farmstay',
+      'sindhudurg-heritage',
+      'tarkarli-beach-villa',
+      'prop-deepmagare-sea-breeze',
+      'guhagar-coastal-hut',
+      'ratnagiri-spice-farm',
+      'devgad-mango-villa',
+      'alibaug-palm-cottage',
+      'kashid-white-sand',
+      'chiplun-river-wada',
+      'murud-sea-fort-house'
+    ];
+
+    const filteredRows = (result.rows || []).filter(p => p && p.id && (MASTER_12_IDS.includes(p.id) || String(p.id).startsWith('host_prop_') || p.is_custom_host));
+    return res.json({ success: true, count: filteredRows.length, properties: filteredRows, data: filteredRows });
   } catch (error) {
     console.error('Fetch properties error:', error);
     return res.json({ success: true, count: 0, properties: [], data: [], notice: 'Database table or connection pending' });
