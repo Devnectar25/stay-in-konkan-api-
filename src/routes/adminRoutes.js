@@ -81,7 +81,7 @@ router.get('/stats', async (req, res) => {
 
     const stats = {
       totalVolume: parseFloat(bookingsRes.rows[0]?.volume || 142000),
-      totalBookings: parseInt(bookingsRes.rows[0]?.total || 48, 10),
+      totalBookings: parseInt(bookingsRes.rows[0]?.total || 12, 10),
       totalProperties: 12,
       pendingProperties: 0,
       liveProperties: 12,
@@ -110,7 +110,7 @@ router.get('/stats', async (req, res) => {
       success: true,
       stats: {
         totalVolume: 142000,
-        totalBookings: 48,
+        totalBookings: 12,
         totalProperties: 12,
         pendingProperties: 0,
         liveProperties: 12,

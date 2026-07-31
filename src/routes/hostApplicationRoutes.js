@@ -100,4 +100,24 @@ router.put('/:id/status', async (req, res) => {
   }
 });
 
+/**
+ * DELETE /api/host-applications/:id
+ * Deletes a host application by ID or application_id
+ */
+router.delete('/:id', async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    const result = await query(
+      'DELETE FROM host_applications WHERE id = $1 OR application_id = $1 RETURNING *',
+      [id]
+    );
+
+    return res.json({ success: true, message: 'Host application deleted successfully' });
+  } catch (error) {
+    console.error('Delete host application error:', error);
+    return res.status(500).json({ success: false, message: error.message || 'Database error' });
+  }
+});
+
 export default router;
