@@ -66,6 +66,7 @@ router.post('/sync', async (req, res) => {
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
       ON CONFLICT (email) DO UPDATE SET
         full_name = EXCLUDED.full_name,
+        role = COALESCE(EXCLUDED.role, users.role),
         avatar_url = COALESCE(EXCLUDED.avatar_url, users.avatar_url),
         phone = COALESCE(EXCLUDED.phone, users.phone),
         provider = EXCLUDED.provider,

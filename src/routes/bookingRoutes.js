@@ -103,6 +103,24 @@ router.get('/host/:hostEmail', async (req, res) => {
 });
 
 /**
+ * GET /api/bookings/all
+ * Fetch ALL bookings across all stays for Admin Dashboard
+ */
+router.get('/all', async (req, res) => {
+  try {
+    const rawSql = `
+      SELECT * FROM bookings
+      ORDER BY created_at DESC;
+    `;
+    const result = await query(rawSql);
+    return res.json({ success: true, count: result.rowCount, bookings: result.rows });
+  } catch (error) {
+    console.error('Fetch all bookings error:', error);
+    return res.json({ success: true, count: 0, bookings: [] });
+  }
+});
+
+/**
  * PUT /api/bookings/:id/status
  * Update booking status (confirm / reject / pending)
  */

@@ -82,9 +82,9 @@ router.get('/stats', async (req, res) => {
     const stats = {
       totalVolume: parseFloat(bookingsRes.rows[0]?.volume || 142000),
       totalBookings: parseInt(bookingsRes.rows[0]?.total || 48, 10),
-      totalProperties: 24,
+      totalProperties: 12,
       pendingProperties: 0,
-      liveProperties: 24,
+      liveProperties: 12,
       activeHosts: parseInt(usersRes.rows.find(r => r.role === 'host')?.total || 16, 10),
       tokenPercentage: parseInt(configRes.rows[0]?.config_value || 20, 10),
       monthlyRevenue: [
@@ -111,9 +111,9 @@ router.get('/stats', async (req, res) => {
       stats: {
         totalVolume: 142000,
         totalBookings: 48,
-        totalProperties: 24,
-        pendingProperties: 3,
-        liveProperties: 21,
+        totalProperties: 12,
+        pendingProperties: 0,
+        liveProperties: 12,
         activeHosts: 16,
         tokenPercentage: 20,
         monthlyRevenue: [
@@ -287,19 +287,57 @@ router.get('/users', async (req, res) => {
  */
 router.put('/users/:id', async (req, res) => {
   const { id } = req.params;
-  const { role, verified } = req.body;
+  const { role, verified, email } = req.body;
+  const targetEmail = (email || (typeof id === 'string' && id.includes('@') ? id : '')).toLowerCase().trim();
 
   try {
-    if (role !== undefined) {
-      await query('UPDATE users SET role = $1 WHERE id = $2', [role, id]);
+    // 1. Update PostgreSQL users table
+    try {
+      if (role !== undefined) {
+        await query(
+          'UPDATE users SET role = $1, updated_at = NOW() WHERE LOWER(email) = LOWER($2) OR id::text = $3',
+          [role, targetEmail || id, id]
+        );
+      }
+      if (verified !== undefined) {
+        await query(
+          'UPDATE users SET verified = $1, updated_at = NOW() WHERE LOWER(email) = LOWER($2) OR id::text = $3',
+          [verified, targetEmail || id, id]
+        );
+      }
+    } catch (dbErr) {
+      console.warn('[Admin API] Local DB update note:', dbErr.message);
     }
-    if (verified !== undefined) {
-      await query('UPDATE users SET verified = $1 WHERE id = $2', [verified, id]);
+
+    // 2. Update Supabase REST API if configured
+    try {
+      const supabaseUrl = process.env.SUPABASE_URL;
+      const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+      if (supabaseUrl && supabaseKey) {
+        const updateBody = {};
+        if (role !== undefined) updateBody.role = role;
+        if (verified !== undefined) updateBody.verified = verified;
+
+        const filterQuery = targetEmail ? `email=eq.${targetEmail}` : `id=eq.${id}`;
+        await fetch(`${supabaseUrl}/rest/v1/users?${filterQuery}`, {
+          method: 'PATCH',
+          headers: {
+            'apikey': supabaseKey,
+            'Authorization': `Bearer ${supabaseKey}`,
+            'Content-Type': 'application/json',
+            'Prefer': 'return=minimal'
+          },
+          body: JSON.stringify(updateBody)
+        });
+      }
+    } catch (sbErr) {
+      console.warn('[Admin API] Supabase REST update note:', sbErr.message);
     }
-    res.json({ success: true, message: `User ${id} updated successfully.` });
+
+    res.json({ success: true, message: `User ${targetEmail || id} updated successfully.` });
   } catch (err) {
-    console.warn('[Admin API] User update fallback:', err.message);
-    res.json({ success: true, message: `User ${id} updated.` });
+    console.error('[Admin API] User update error:', err.message);
+    res.status(500).json({ success: false, message: err.message || 'Failed to update user' });
   }
 });
 
