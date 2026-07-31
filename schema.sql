@@ -49,18 +49,7 @@ CREATE TABLE IF NOT EXISTS bookings (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
--- 4. Create Platform Config Table
-CREATE TABLE IF NOT EXISTS platform_config (
-    config_key VARCHAR(255) PRIMARY KEY,
-    config_value TEXT NOT NULL,
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-);
-
--- Seed Default Config & Admin User
-INSERT INTO platform_config (config_key, config_value) 
-VALUES ('token_percentage', '20')
-ON CONFLICT (config_key) DO NOTHING;
-
+-- 4. Seed Default Admin User
 INSERT INTO users (id, full_name, email, role, verified, provider)
 VALUES ('admin_01', 'Platform Administrator', 'admin@stayinkonkan.com', 'admin', true, 'email')
 ON CONFLICT (email) DO NOTHING;
@@ -72,3 +61,25 @@ CREATE TABLE IF NOT EXISTS newsletter_subscribers (
     subscribed_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_newsletter_email ON newsletter_subscribers(email);
+
+-- 6. Create Cancellations Table
+CREATE TABLE IF NOT EXISTS cancellations (
+    id VARCHAR(255) PRIMARY KEY,
+    booking_id VARCHAR(255) NOT NULL,
+    user_email VARCHAR(255) NOT NULL,
+    user_name VARCHAR(255),
+    property_name VARCHAR(255),
+    check_in VARCHAR(100),
+    check_out VARCHAR(100),
+    paid_amount NUMERIC(10, 2) DEFAULT 0,
+    refund_amount NUMERIC(10, 2) DEFAULT 0,
+    refund_percentage INT DEFAULT 0,
+    notice_days INT DEFAULT 0,
+    cancellation_reason TEXT DEFAULT 'Guest requested cancellation',
+    status VARCHAR(50) DEFAULT 'requested',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_cancellations_booking_id ON cancellations(booking_id);
+CREATE INDEX IF NOT EXISTS idx_cancellations_user_email ON cancellations(user_email);
+

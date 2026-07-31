@@ -10,6 +10,7 @@ import contactRoutes from './routes/contactRoutes.js';
 import hostApplicationRoutes from './routes/hostApplicationRoutes.js';
 import wishlistRoutes from './routes/wishlistRoutes.js';
 import reviewRoutes from './routes/reviewRoutes.js';
+import cancellationRoutes from './routes/cancellationRoutes.js';
 
 dotenv.config();
 
@@ -56,6 +57,7 @@ app.use('/api/contact', contactRoutes);
 app.use('/api/host-applications', hostApplicationRoutes);
 app.use('/api/wishlists', wishlistRoutes);
 app.use('/api/reviews', reviewRoutes);
+app.use('/api/cancellations', cancellationRoutes);
 
 
 
