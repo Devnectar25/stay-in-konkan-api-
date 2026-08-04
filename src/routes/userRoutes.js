@@ -40,6 +40,46 @@ router.get('/check-email', async (req, res) => {
 });
 
 /**
+ * POST /api/users/login
+ * Server-side credential verification: accepts email + password_hash.
+ * Returns { success, user } or { success: false, reason } with clear diagnostic info.
+ */
+router.post('/login', async (req, res) => {
+  const { email, password_hash } = req.body;
+
+  if (!email || !password_hash) {
+    return res.status(400).json({ success: false, reason: 'EMAIL_OR_HASH_MISSING', message: 'Email and password_hash are required.' });
+  }
+
+  try {
+    const rawSql = `SELECT id, email, full_name, avatar_url, role, provider, verified, password_hash FROM users WHERE LOWER(email) = LOWER($1)`;
+    const result = await query(rawSql, [email.trim().toLowerCase()]);
+
+    if (result.rows.length === 0) {
+      return res.status(401).json({ success: false, reason: 'USER_NOT_FOUND', message: 'No account found with this email.' });
+    }
+
+    const user = result.rows[0];
+
+    if (!user.password_hash) {
+      // Account exists but has no password (e.g. created via OAuth / seed without hash)
+      return res.status(401).json({ success: false, reason: 'NO_PASSWORD_SET', message: 'No password set for this account. Please use Google/Facebook login or reset your password.' });
+    }
+
+    if (user.password_hash !== password_hash) {
+      return res.status(401).json({ success: false, reason: 'WRONG_PASSWORD', message: 'Incorrect password.' });
+    }
+
+    // Success — strip password_hash from response
+    const { password_hash: _, ...safeUser } = user;
+    return res.json({ success: true, message: 'Login successful', user: safeUser });
+  } catch (error) {
+    console.error('Login error:', error);
+    return res.status(500).json({ success: false, reason: 'DB_ERROR', message: error.message || 'Database error' });
+  }
+});
+
+/**
  * POST /api/users/sync (or upsert user profile)
  * Raw query to insert or update user details upon registration / login / OAuth.
  */
