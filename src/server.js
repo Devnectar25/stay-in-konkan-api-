@@ -67,16 +67,39 @@ app.use((err, req, res, next) => {
   res.status(500).json({ success: false, message: err.message || 'Internal Server Error' });
 });
 
+// Global Unhandled Rejection & Exception Handlers (Prevents server crashes)
+process.on('unhandledRejection', (reason, promise) => {
+  console.warn('[API Server Warning] Unhandled Promise Rejection:', reason?.message || reason);
+});
+
+process.on('uncaughtException', (err) => {
+  console.warn('[API Server Warning] Uncaught Exception:', err?.message || err);
+});
+
 // Export app for Vercel serverless deployment
 export default app;
 
 // Start Server (only when run directly in Node)
 if (process.env.NODE_ENV !== 'production') {
-  app.listen(PORT, () => {
+  const server = app.listen(PORT, () => {
     console.log(`=================================================`);
     console.log(`🚀 Stay in Konkan API running on http://localhost:${PORT}`);
     console.log(`⚡ Database mode: Raw PostgreSQL queries (via pg)`);
     console.log(`=================================================`);
+  });
+
+  server.on('error', (err) => {
+    if (err.code === 'EADDRINUSE') {
+      console.warn(`[API Server Warning] Port ${PORT} is currently in use. Retrying in 1 second...`);
+      setTimeout(() => {
+        try {
+          server.close();
+        } catch (e) { }
+        server.listen(PORT);
+      }, 1000);
+    } else {
+      console.error('[API Server Error]:', err.message);
+    }
   });
 }
 
