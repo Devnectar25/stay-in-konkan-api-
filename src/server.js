@@ -11,10 +11,9 @@ import hostApplicationRoutes from './routes/hostApplicationRoutes.js';
 import wishlistRoutes from './routes/wishlistRoutes.js';
 import reviewRoutes from './routes/reviewRoutes.js';
 import cancellationRoutes from './routes/cancellationRoutes.js';
+import couponRoutes from './routes/couponRoutes.js';
 
 dotenv.config();
-
-
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -58,6 +57,7 @@ app.use('/api/host-applications', hostApplicationRoutes);
 app.use('/api/wishlists', wishlistRoutes);
 app.use('/api/reviews', reviewRoutes);
 app.use('/api/cancellations', cancellationRoutes);
+app.use('/api/coupons', couponRoutes);
 
 
 
