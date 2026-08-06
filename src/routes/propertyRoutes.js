@@ -160,4 +160,31 @@ router.post('/', async (req, res) => {
   }
 });
 
+/**
+ * PUT /api/properties/:id/status
+ * Updates status of a property (e.g. 'live', 'pending', 'rejected')
+ */
+router.put('/:id/status', async (req, res) => {
+  const { id } = req.params;
+  const { status } = req.body;
+
+  if (!status) {
+    return res.status(400).json({ success: false, message: 'Status is required' });
+  }
+
+  try {
+    const rawSql = `
+      UPDATE properties
+      SET status = $1, updated_at = NOW()
+      WHERE LOWER(id) = LOWER($2) OR LOWER(REPLACE(id, '_', '-')) = LOWER(REPLACE($2, '_', '-'))
+      RETURNING *;
+    `;
+    const result = await query(rawSql, [status.toLowerCase().trim(), id.trim()]);
+    return res.json({ success: true, message: 'Property status updated', property: result.rows[0] });
+  } catch (error) {
+    console.error('Update property status error:', error);
+    return res.status(500).json({ success: false, message: error.message || 'Database error' });
+  }
+});
+
 export default router;

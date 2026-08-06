@@ -4,6 +4,35 @@ import { query } from '../db.js';
 
 const router = express.Router();
 
+let isBookingsTableChecked = false;
+const ensureBookingsTable = async () => {
+  if (isBookingsTableChecked) return;
+  isBookingsTableChecked = true;
+  try {
+    await query(`
+      CREATE TABLE IF NOT EXISTS bookings (
+        id VARCHAR(255) PRIMARY KEY,
+        booking_id VARCHAR(255),
+        user_email VARCHAR(255),
+        user_name VARCHAR(255),
+        user_phone VARCHAR(255),
+        property_name VARCHAR(255),
+        check_in VARCHAR(255),
+        check_out VARCHAR(255),
+        guests VARCHAR(100),
+        total_amount VARCHAR(100),
+        paid_amount VARCHAR(100),
+        remaining_amount VARCHAR(100),
+        payment_id VARCHAR(255),
+        status VARCHAR(50) DEFAULT 'confirmed',
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+      );
+    `);
+  } catch (err) {
+    console.warn('Bookings table init check:', err.message);
+  }
+};
+
 /**
  * POST /api/bookings
  * Raw SQL query to insert a new booking
@@ -15,8 +44,10 @@ router.post('/', async (req, res) => {
     paid_amount, payment_status, status, payment_id 
   } = req.body;
 
+  await ensureBookingsTable();
+
   const finalBookingId = booking_id || id || `SIK-${Math.floor(100000 + Math.random() * 900000)}`;
-  const uuid = crypto.randomUUID();
+  const uuid = req.body.id || crypto.randomUUID();
 
   try {
     const rawSql = `
