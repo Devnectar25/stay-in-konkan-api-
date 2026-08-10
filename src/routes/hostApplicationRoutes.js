@@ -92,32 +92,8 @@ router.post('/', async (req, res) => {
 
     const result = await query(rawSql, params);
 
-    // Also auto-insert pending property into properties table if property name/title was supplied
-    try {
-      if (propName) {
-        await query(
-          `INSERT INTO properties (id, name, title, host, host_email, host_phone, location, price, price_per_night, type, status, description, created_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW())
-           ON CONFLICT (id) DO UPDATE SET status = EXCLUDED.status`,
-          [
-            `prop-${uuid}`,
-            propName,
-            propName,
-            name.trim(),
-            cleanEmail,
-            phone ? phone.trim() : null,
-            location.trim(),
-            '2999',
-            2999,
-            propertyType || 'homestay',
-            'pending',
-            description ? description.trim() : ''
-          ]
-        );
-      }
-    } catch (propErr) {
-      console.warn('Property table insert note:', propErr.message);
-    }
+    // Do not auto-insert pending property into properties table upon host registration application.
+    // Properties should only be created/listed explicitly by approved hosts.
 
     return res.json({
       success: true,

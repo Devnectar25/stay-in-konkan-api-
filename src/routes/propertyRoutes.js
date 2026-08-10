@@ -109,42 +109,79 @@ router.get('/:id', async (req, res) => {
  * Saves a new property listing to properties table in PostgreSQL
  */
 router.post('/', async (req, res) => {
-  const { name, title, host, host_email, host_phone, location, price, type, description, image, rooms } = req.body;
+  const { 
+    name, title, host, host_email, host_phone, location, price, pricePerNight, price_per_night, type, 
+    description, image, image_url, rooms, status,
+    facility1_image, facility2_image, facility3_image,
+    facilityImage1, facilityImage2, facilityImage3
+  } = req.body;
 
   if (!title && !name) {
     return res.status(400).json({ success: false, message: 'Property name or title is required.' });
   }
 
-  const propId = req.body.id || req.body.property_id || crypto.randomUUID();
-  const propTitle = title || name;
-  const propName = name || title;
+  const propTitle = (title || name || 'New Konkan Property').trim();
+  const propName = (name || title || 'New Konkan Property').trim();
+  const propId = req.body.id || req.body.property_id || ('prop-' + Date.now());
+  const finalPrice = Number(price || pricePerNight || price_per_night || 2000);
+  const finalImage = image || image_url || '/assets/images/home/default_property.png';
+  const finalHost = (host || req.body.hostName || req.body.owner_name || 'Local Host').trim();
+  const finalHostEmail = (host_email || req.body.hostEmail || req.body.owner_email || '').trim().toLowerCase();
+  const finalHostPhone = (host_phone || req.body.hostPhone || '').trim();
+  const finalStatus = (status || 'pending').trim().toLowerCase();
+  const roomsJson = typeof rooms === 'string' ? rooms : JSON.stringify(rooms || []);
+  const finalFac1 = facility1_image || facilityImage1 || null;
+  const finalFac2 = facility2_image || facilityImage2 || null;
+  const finalFac3 = facility3_image || facilityImage3 || null;
 
   try {
     const rawSql = `
       INSERT INTO properties (
         id, name, title, host, host_email, host_phone, location, price, type, 
-        status, image, description, rating, reviews_count, is_featured, created_at, updated_at
+        status, image, image_url, description, rating, reviews_count, rooms, 
+        "facility1_image", "facility2_image", "facility3_image", created_at, updated_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NOW(), NOW())
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, NOW(), NOW())
+      ON CONFLICT (id) DO UPDATE SET
+        title = EXCLUDED.title,
+        name = EXCLUDED.name,
+        host = EXCLUDED.host,
+        host_email = EXCLUDED.host_email,
+        location = EXCLUDED.location,
+        price = EXCLUDED.price,
+        type = EXCLUDED.type,
+        status = EXCLUDED.status,
+        image = EXCLUDED.image,
+        image_url = EXCLUDED.image_url,
+        description = EXCLUDED.description,
+        rooms = EXCLUDED.rooms,
+        "facility1_image" = EXCLUDED."facility1_image",
+        "facility2_image" = EXCLUDED."facility2_image",
+        "facility3_image" = EXCLUDED."facility3_image",
+        updated_at = NOW()
       RETURNING *;
     `;
 
     const params = [
       propId,
-      propName.trim(),
-      propTitle.trim(),
-      host ? host.trim() : 'Konkan Host',
-      host_email ? host_email.trim().toLowerCase() : null,
-      host_phone ? host_phone.trim() : null,
+      propName,
+      propTitle,
+      finalHost,
+      finalHostEmail,
+      finalHostPhone,
       location ? location.trim() : 'Konkan',
-      price ? String(price) : '0',
+      finalPrice,
       type ? type.trim().toLowerCase() : 'homestay',
-      req.body.status || 'pending',
-      image || null,
+      finalStatus,
+      finalImage,
+      finalImage,
       description ? description.trim() : '',
-      '5.0',
+      5.0,
       0,
-      true
+      roomsJson,
+      finalFac1,
+      finalFac2,
+      finalFac3
     ];
 
     const result = await query(rawSql, params);
@@ -183,6 +220,115 @@ router.put('/:id/status', async (req, res) => {
     return res.json({ success: true, message: 'Property status updated', property: result.rows[0] });
   } catch (error) {
     console.error('Update property status error:', error);
+    return res.status(500).json({ success: false, message: error.message || 'Database error' });
+  }
+});
+
+/**
+ * PUT /api/properties/:id
+ * Updates full property details (title, location, price, type, description, amenities, image, status)
+ */
+router.put('/:id', async (req, res) => {
+  const { id } = req.params;
+  const {
+    title,
+    name,
+    location,
+    price,
+    price_per_night,
+    pricePerNight,
+    type,
+    description,
+    amenities,
+    image,
+    image_url,
+    status,
+    facilityImage1,
+    facilityImage2,
+    facilityImage3,
+    rooms
+  } = req.body;
+
+  const finalTitle = (title || name || '').trim();
+  const finalLocation = (location || '').trim();
+  const finalPrice = Number(price || price_per_night || pricePerNight || 0);
+  const finalType = (type || 'homestay').trim().toLowerCase();
+  const finalDesc = (description || '').trim();
+  const finalImage = image || image_url || null;
+  const finalStatus = (status || 'live').trim().toLowerCase();
+  const finalAmenities = amenities || '';
+  const finalFacilityImage1 = facilityImage1 || null;
+  const finalFacilityImage2 = facilityImage2 || null;
+  const finalFacilityImage3 = facilityImage3 || null;
+  const finalRooms = typeof rooms === 'string' ? rooms : JSON.stringify(rooms || []);
+
+  try {
+    const rawSql = `
+      UPDATE properties
+      SET 
+        title = $1,
+        name = $1,
+        location = $2,
+        price = $3,
+        type = $4,
+        description = $5,
+        image = COALESCE($6, image),
+        image_url = COALESCE($6, image_url),
+        status = $7,
+        facility1_image = COALESCE($8, facility1_image),
+        facility2_image = COALESCE($9, facility2_image),
+        facility3_image = COALESCE($10, facility3_image),
+        rooms = $11,
+        updated_at = NOW()
+      WHERE LOWER(id) = LOWER($12) OR LOWER(REPLACE(id, '_', '-')) = LOWER(REPLACE($12, '_', '-')) OR LOWER(title) = LOWER($12)
+      RETURNING *;
+    `;
+
+    const result = await query(rawSql, [
+      finalTitle,
+      finalLocation,
+      finalPrice,
+      finalType,
+      finalDesc,
+      finalImage,
+      finalStatus,
+      finalFacilityImage1,
+      finalFacilityImage2,
+      finalFacilityImage3,
+      finalRooms,
+      id.trim()
+    ]);
+
+    return res.json({
+      success: true,
+      message: 'Property updated successfully in database!',
+      property: result.rows[0]
+    });
+  } catch (error) {
+    console.error('Update property error:', error);
+    return res.status(500).json({ success: false, message: error.message || 'Database error' });
+  }
+});
+
+/**
+ * DELETE /api/properties/:id
+ * Deletes a property listing from database
+ */
+router.delete('/:id', async (req, res) => {
+  const { id } = req.params;
+  const normalizedId = (id || '').trim();
+
+  try {
+    const rawSql = `
+      DELETE FROM properties
+      WHERE LOWER(id) = LOWER($1) 
+         OR LOWER(REPLACE(id, '_', '-')) = LOWER(REPLACE($1, '_', '-'))
+         OR LOWER(title) = LOWER($1)
+    `;
+    const result = await query(rawSql, [normalizedId]);
+    return res.json({ success: true, message: `Property ${normalizedId} deleted successfully.` });
+  } catch (error) {
+    console.error('Delete property error:', error);
     return res.status(500).json({ success: false, message: error.message || 'Database error' });
   }
 });

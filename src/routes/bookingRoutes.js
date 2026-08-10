@@ -16,7 +16,10 @@ const ensureBookingsTable = async () => {
         user_email VARCHAR(255),
         user_name VARCHAR(255),
         user_phone VARCHAR(255),
+        property_id VARCHAR(255),
         property_name VARCHAR(255),
+        host_email VARCHAR(255),
+        host_name VARCHAR(255),
         check_in VARCHAR(255),
         check_out VARCHAR(255),
         guests VARCHAR(100),
@@ -28,6 +31,24 @@ const ensureBookingsTable = async () => {
         created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
       );
     `);
+    const cols = [
+      'booking_id VARCHAR(255)',
+      'user_email VARCHAR(255)',
+      'user_name VARCHAR(255)',
+      'user_phone VARCHAR(255)',
+      'property_id VARCHAR(255)',
+      'property_name VARCHAR(255)',
+      'host_email VARCHAR(255)',
+      'host_name VARCHAR(255)',
+      'total_amount VARCHAR(100)',
+      'paid_amount VARCHAR(100)',
+      'remaining_amount VARCHAR(100)',
+      'payment_id VARCHAR(255)',
+      'status VARCHAR(50) DEFAULT \'confirmed\''
+    ];
+    for (const c of cols) {
+      await query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS ${c};`).catch(() => {});
+    }
   } catch (err) {
     console.warn('Bookings table init check:', err.message);
   }
@@ -40,48 +61,77 @@ const ensureBookingsTable = async () => {
 router.post('/', async (req, res) => {
   const { 
     id, booking_id, user_email, guest_email, user_name, guest_name, user_phone, guest_phone, 
-    property_name, property_title, check_in, check_out, guests, total_amount, total_price, 
-    paid_amount, payment_status, status, payment_id 
+    property_id, property_name, property_title, host_email, host_name, check_in, check_out, guests, 
+    total_amount, total_price, paid_amount, payment_status, status, payment_id 
   } = req.body;
 
   await ensureBookingsTable();
 
   const finalBookingId = booking_id || id || `SIK-${Math.floor(100000 + Math.random() * 900000)}`;
-  const uuid = req.body.id || crypto.randomUUID();
+  const isValidUuid = (str) => typeof str === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
+  const uuid = isValidUuid(req.body.id) ? req.body.id : crypto.randomUUID();
+
+  const totalVal = Number(total_amount || total_price || 0);
+  const paidVal = Number(paid_amount || totalVal);
+  const remainingVal = Math.max(0, totalVal - paidVal);
+
+  const finalUserEmail = (user_email || guest_email || req.body.email || 'guest@example.com').trim().toLowerCase();
+  const finalUserName = (user_name || guest_name || 'Guest User').trim();
+  const finalUserPhone = (user_phone || guest_phone || '').trim();
+  const finalPropId = (property_id || 'prop_homestay').trim();
+  const finalPropName = (property_name || property_title || 'Konkan Homestay').trim();
+  const finalHostEmail = (host_email || req.body.owner_email || 'host@stayinkonkan.com').trim().toLowerCase();
+  const finalHostName = (host_name || req.body.owner_name || 'Local Host').trim();
+  const finalCheckIn = (check_in || '').trim();
+  const finalCheckOut = (check_out || '').trim();
+  const finalGuests = typeof guests === 'object' ? JSON.stringify(guests) : String(guests || '2 Guests');
+  const finalStatus = (status || payment_status || 'pending').trim().toLowerCase();
+  const finalPaymentId = (payment_id || '').trim();
 
   try {
     const rawSql = `
       INSERT INTO bookings (
-        id, booking_id, user_email, user_name, user_phone, property_name, check_in, check_out, guests, total_amount, paid_amount, remaining_amount, payment_id, status, created_at
+        id, booking_id, user_email, user_name, user_phone, property_id, property_name, host_email, host_name, check_in, check_out, guests, total_amount, paid_amount, remaining_amount, payment_id, status, created_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, NOW())
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, NOW())
+      ON CONFLICT (id) DO UPDATE SET
+        booking_id = EXCLUDED.booking_id,
+        user_email = EXCLUDED.user_email,
+        user_name = EXCLUDED.user_name,
+        property_name = EXCLUDED.property_name,
+        host_email = EXCLUDED.host_email,
+        status = EXCLUDED.status,
+        payment_id = EXCLUDED.payment_id
       RETURNING *;
     `;
-
-    const total = total_amount || total_price || 0;
-    const paid = paid_amount || total;
-    const remaining = Math.max(0, total - paid);
 
     const params = [
       uuid,
       finalBookingId,
-      user_email || guest_email || 'guest@example.com',
-      user_name || guest_name || 'Guest User',
-      user_phone || guest_phone || null,
-      property_name || property_title || 'Konkan Heritage Stay',
-      check_in || '',
-      check_out || '',
-      guests || '2 Guests',
-      total.toString(),
-      paid.toString(),
-      remaining.toString(),
-      payment_id || null,
-      status || payment_status || 'confirmed'
+      finalUserEmail,
+      finalUserName,
+      finalUserPhone,
+      finalPropId,
+      finalPropName,
+      finalHostEmail,
+      finalHostName,
+      finalCheckIn,
+      finalCheckOut,
+      finalGuests,
+      totalVal.toString(),
+      paidVal.toString(),
+      remainingVal.toString(),
+      finalPaymentId,
+      finalStatus
     ];
 
     const result = await query(rawSql, params);
 
-    return res.json({ success: true, message: 'Booking created successfully', booking: result.rows[0] });
+    return res.json({ 
+      success: true, 
+      message: 'Booking created successfully', 
+      booking: (result && result.rows && result.rows[0]) ? result.rows[0] : { id: uuid, booking_id: finalBookingId, user_email: finalUserEmail, property_name: finalPropName } 
+    });
   } catch (error) {
     console.error('Create booking error:', error);
     return res.status(500).json({ success: false, message: error.message || 'Database error' });
@@ -119,10 +169,9 @@ router.get('/host/:hostEmail', async (req, res) => {
 
   try {
     const rawSql = `
-      SELECT DISTINCT b.* FROM bookings b
-      LEFT JOIN properties p ON LOWER(b.property_name) LIKE CONCAT('%', LOWER(p.name), '%') OR LOWER(b.property_name) LIKE CONCAT('%', LOWER(p.title), '%') OR LOWER(p.name) LIKE CONCAT('%', LOWER(b.property_name), '%')
-      WHERE LOWER(p.host_email) = LOWER($1) OR LOWER(p.owner_email) = LOWER($1) OR LOWER(b.host_email) = LOWER($1) OR LOWER(b.user_email) = LOWER($1)
-      ORDER BY b.created_at DESC;
+      SELECT * FROM bookings
+      WHERE LOWER(host_email) = LOWER($1) OR LOWER(user_email) = LOWER($1)
+      ORDER BY created_at DESC;
     `;
     const result = await query(rawSql, [hostEmail]);
 
@@ -172,6 +221,26 @@ router.put('/:id/status', async (req, res) => {
   } catch (error) {
     console.error('Update booking status error:', error);
     return res.json({ success: true, message: `Booking ${id} status set to ${status}.` });
+  }
+});
+
+/**
+ * DELETE /api/bookings/:id
+ * Delete a booking record from database
+ */
+router.delete('/:id', async (req, res) => {
+  const { id } = req.params;
+  const cleanId = (id || '').trim();
+
+  try {
+    await query(
+      'DELETE FROM bookings WHERE id = $1 OR booking_id = $1 OR payment_id = $1',
+      [cleanId]
+    );
+    return res.json({ success: true, message: `Booking ${cleanId} deleted successfully.` });
+  } catch (error) {
+    console.error('Delete booking error:', error);
+    return res.status(500).json({ success: false, message: error.message || 'Database error' });
   }
 });
 
