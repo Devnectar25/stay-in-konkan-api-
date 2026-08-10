@@ -80,4 +80,20 @@ router.get('/', async (req, res) => {
   }
 });
 
+/**
+ * DELETE /api/reviews/:id
+ * Deletes a review from the database
+ */
+router.delete('/:id', async (req, res) => {
+  const { id } = req.params;
+
+  try {
+    await query('DELETE FROM reviews WHERE id = $1', [id]);
+    return res.json({ success: true, message: 'Review deleted successfully.' });
+  } catch (error) {
+    console.error('Delete review error:', error);
+    return res.status(500).json({ success: false, message: error.message || 'Database error' });
+  }
+});
+
 export default router;

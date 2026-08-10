@@ -27,11 +27,11 @@ const ensureTableExists = async () => {
         refund_txn_id VARCHAR(255),
         created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
       );
-      try {
-        await query(`ALTER TABLE cancellations ADD COLUMN IF NOT EXISTS refund_status VARCHAR(50) DEFAULT 'pending';`);
-        await query(`ALTER TABLE cancellations ADD COLUMN IF NOT EXISTS refund_txn_id VARCHAR(255);`);
-      } catch (colErr) {}
     `);
+    try {
+      await query(`ALTER TABLE cancellations ADD COLUMN IF NOT EXISTS refund_status VARCHAR(50) DEFAULT 'pending';`);
+      await query(`ALTER TABLE cancellations ADD COLUMN IF NOT EXISTS refund_txn_id VARCHAR(255);`);
+    } catch (colErr) {}
   } catch (e) {
     console.warn('[Cancellations API] Table check note:', e.message);
   }
@@ -241,6 +241,24 @@ router.get('/user/:email', async (req, res) => {
   } catch (error) {
     console.error('Fetch user cancellations error:', error);
     return res.json({ success: true, count: 0, cancellations: [] });
+  }
+});
+
+/**
+ * DELETE /api/cancellations/:id
+ * Delete a cancellation record from database
+ */
+router.delete('/:id', async (req, res) => {
+  const { id } = req.params;
+  const cleanId = (id || '').trim();
+
+  try {
+    await ensureTableExists();
+    await query('DELETE FROM cancellations WHERE id = $1 OR booking_id = $1', [cleanId]);
+    return res.json({ success: true, message: `Cancellation ${cleanId} deleted successfully.` });
+  } catch (error) {
+    console.error('Delete cancellation error:', error);
+    return res.status(500).json({ success: false, message: error.message || 'Database error' });
   }
 });
 
