@@ -126,43 +126,65 @@ router.get('/', async (req, res) => {
  * Updates host application status (approved / rejected)
  */
 router.put('/:id/status', async (req, res) => {
-  const { id } = req.params;
-  const { status } = req.body;
-  const cleanId = (id || '').trim();
-  const cleanEmail = cleanId.toLowerCase();
+  let rawId = req.params.id || '';
+  try {
+    rawId = decodeURIComponent(rawId);
+  } catch (e) {}
+
+  const { status, email } = req.body;
+  let targetEmail = (email || (typeof rawId === 'string' && rawId.includes('@') ? rawId : '')).toLowerCase().trim();
+  try {
+    targetEmail = decodeURIComponent(targetEmail);
+  } catch (e) {}
 
   try {
     await ensureHostApplicationsTable();
 
     const result = await query(
-      'UPDATE host_applications SET status = $1 WHERE id = $2 OR application_id = $2 OR LOWER(applicant_email) = LOWER($3) RETURNING *',
-      [status, cleanId, cleanEmail]
+      `UPDATE host_applications 
+       SET status = $1 
+       WHERE id = $2 
+          OR application_id = $2 
+          OR ($3 != '' AND LOWER(applicant_email) = LOWER($3)) 
+       RETURNING *`,
+      [status || 'pending', rawId, targetEmail]
     );
 
     // Sync with properties table
     try {
       const propStatus = (status === 'approved') ? 'live' : status;
-      await query(
-        'UPDATE properties SET status = $1 WHERE LOWER(host_email) = LOWER($2) OR id = $3',
-        [propStatus, cleanEmail, cleanId]
-      );
+      if (targetEmail || rawId) {
+        await query(
+          'UPDATE properties SET status = $1 WHERE LOWER(host_email) = LOWER($2) OR id = $3',
+          [propStatus, targetEmail || rawId, rawId]
+        );
+      }
     } catch (e) { }
 
-    // Sync with users table role promotion if approved
-    if (status === 'approved') {
-      try {
-        await query(
-          'UPDATE users SET role = $1, verified = true, updated_at = NOW() WHERE LOWER(email) = LOWER($2) OR id::text = $3',
-          ['host', cleanEmail, cleanId]
-        );
-      } catch (e) { }
+    // Sync with users table role promotion/demotion
+    if (targetEmail || rawId) {
+      if (status === 'approved') {
+        try {
+          await query(
+            'UPDATE users SET role = $1, verified = true, updated_at = NOW() WHERE LOWER(email) = LOWER($2) OR id::text = $3',
+            ['host', targetEmail || rawId, rawId]
+          );
+        } catch (e) { }
+      } else if (status === 'demoted' || status === 'rejected') {
+        try {
+          await query(
+            'UPDATE users SET role = $1, verified = false, updated_at = NOW() WHERE LOWER(email) = LOWER($2) OR id::text = $3',
+            ['guest', targetEmail || rawId, rawId]
+          );
+        } catch (e) { }
+      }
     }
 
-    if (result.rows.length === 0) {
-      return res.json({ success: true, message: `Application status locally updated to ${status}` });
-    }
-
-    return res.json({ success: true, message: `Application status updated to ${status}`, application: result.rows[0] });
+    return res.json({
+      success: true,
+      message: `Application status updated to ${status}`,
+      application: result.rows[0] || null
+    });
   } catch (error) {
     console.error('Update host application status error:', error);
     return res.json({ success: true, message: `Application status updated to ${status}` });

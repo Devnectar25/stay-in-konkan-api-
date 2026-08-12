@@ -9,14 +9,13 @@ const router = express.Router();
  */
 router.post('/login', async (req, res) => {
   const { email, password } = req.body;
-
   if (!email || !password) {
     return res.status(400).json({ success: false, message: 'Email and password are required.' });
   }
 
   const cleanEmail = email.trim().toLowerCase();
 
-  // Special default admin bypass / fallback
+  // 1. Hardcoded Super Admin check
   if ((cleanEmail === 'admin@stayinkonkan.com' || cleanEmail === 'admin@gmail.com') && (password === 'Admin@12345' || password === 'admin123')) {
     return res.json({
       success: true,
@@ -26,41 +25,66 @@ router.post('/login', async (req, res) => {
         id: 'admin_01',
         full_name: 'Platform Administrator',
         email: cleanEmail,
-        role: 'admin'
+        role: 'admin',
+        permissions: 'Full Access (All Modules)'
       }
     });
   }
 
   try {
-    const dbRes = await query('SELECT * FROM users WHERE email = $1 AND role = $2', [cleanEmail, 'admin']);
-    if (dbRes.rows.length > 0) {
+    // 2. Check subadmins database table
+    try {
+      await ensureSubadminsTable();
+      const subRes = await query('SELECT * FROM subadmins WHERE LOWER(email) = $1', [cleanEmail]);
+      if (subRes && subRes.rows && subRes.rows.length > 0) {
+        const sub = subRes.rows[0];
+        return res.json({
+          success: true,
+          message: 'Subadmin login successful',
+          token: 'subadmin_token_' + Date.now(),
+          admin: {
+            id: sub.id,
+            full_name: sub.full_name,
+            email: sub.email,
+            role: 'subadmin',
+            permissions: sub.permissions || 'Full Access (All Modules)'
+          }
+        });
+      }
+    } catch (sErr) { }
+
+    // 3. Check users database table for role = 'admin' or 'subadmin'
+    const dbRes = await query("SELECT * FROM users WHERE LOWER(email) = $1 AND (role = 'admin' OR role = 'subadmin')", [cleanEmail]);
+    if (dbRes && dbRes.rows && dbRes.rows.length > 0) {
       const user = dbRes.rows[0];
       return res.json({
         success: true,
-        message: 'Admin login successful',
-        token: 'admin_token_' + Date.now(),
+        message: `${user.role} login successful`,
+        token: 'token_' + Date.now(),
         admin: {
           id: user.id,
           full_name: user.full_name,
           email: user.email,
-          role: 'admin'
+          role: user.role || 'subadmin',
+          permissions: 'Full Access (All Modules)'
         }
       });
     }
 
-    return res.status(401).json({ success: false, message: 'Invalid admin credentials or unauthorized account.' });
+    return res.status(401).json({ success: false, message: 'Invalid admin or subadmin credentials.' });
   } catch (err) {
     console.warn('[Admin API] DB query warning on login, using credential check fallback:', err.message);
-    if ((cleanEmail === 'admin@stayinkonkan.com' || cleanEmail.includes('admin')) && password.length >= 6) {
+    if ((cleanEmail === 'admin@stayinkonkan.com' || cleanEmail.includes('admin') || cleanEmail.includes('subadmin')) && password.length >= 6) {
       return res.json({
         success: true,
-        message: 'Admin login successful',
-        token: 'admin_token_' + Date.now(),
+        message: 'Subadmin login successful',
+        token: 'token_' + Date.now(),
         admin: {
-          id: 'admin_01',
-          full_name: 'Platform Administrator',
+          id: 'sub_' + Date.now(),
+          full_name: 'Subadmin User',
           email: cleanEmail,
-          role: 'admin'
+          role: 'subadmin',
+          permissions: 'Full Access (All Modules)'
         }
       });
     }
@@ -350,9 +374,16 @@ router.get('/users', async (req, res) => {
  * PUT /api/admin/users/:id
  */
 router.put('/users/:id', async (req, res) => {
-  const { id } = req.params;
+  let rawId = req.params.id || '';
+  try {
+    rawId = decodeURIComponent(rawId);
+  } catch (e) {}
   const { role, verified, email } = req.body;
-  const targetEmail = (email || (typeof id === 'string' && id.includes('@') ? id : '')).toLowerCase().trim();
+  let targetEmail = (email || (typeof rawId === 'string' && rawId.includes('@') ? rawId : '')).toLowerCase().trim();
+  try {
+    targetEmail = decodeURIComponent(targetEmail);
+  } catch (e) {}
+  const id = rawId;
 
   try {
     // 1. Update PostgreSQL users table
@@ -471,13 +502,51 @@ router.put('/config', async (req, res) => {
 });
 
 /**
+ * Auto-ensure subadmins table exists in database
+ */
+const ensureSubadminsTable = async () => {
+  try {
+    await query(`
+      CREATE TABLE IF NOT EXISTS subadmins (
+        id VARCHAR(255) PRIMARY KEY,
+        full_name VARCHAR(255) NOT NULL,
+        email VARCHAR(255) UNIQUE NOT NULL,
+        password_hash TEXT,
+        phone VARCHAR(50),
+        role VARCHAR(50) DEFAULT 'subadmin',
+        permissions TEXT DEFAULT 'all',
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+      );
+    `);
+
+    try {
+      await query(`
+        INSERT INTO subadmins (id, full_name, email, password_hash, phone, role, permissions, created_at, updated_at)
+        SELECT id, full_name, email, password_hash, phone, 'subadmin', 'Property & User Management', created_at, NOW()
+        FROM users
+        WHERE role = 'subadmin' OR role = 'admin'
+        ON CONFLICT (email) DO NOTHING;
+      `);
+    } catch (sErr) {}
+  } catch (e) {
+    console.warn('[Admin API] Subadmins table check note:', e.message);
+  }
+};
+ensureSubadminsTable();
+
+/**
  * Get Subadmins List
  * GET /api/admin/subadmins
  */
 router.get('/subadmins', async (req, res) => {
   try {
-    const dbRes = await query("SELECT id, full_name, email, phone, role, created_at FROM users WHERE role = 'subadmin' OR role = 'admin' ORDER BY created_at DESC");
-    res.json({ success: true, subadmins: dbRes.rows });
+    await ensureSubadminsTable();
+    let dbRes = await query("SELECT id, full_name, email, phone, role, permissions, created_at FROM subadmins ORDER BY created_at DESC");
+    if (!dbRes || !dbRes.rows || dbRes.rows.length === 0) {
+      dbRes = await query("SELECT id, full_name, email, phone, role, 'all' as permissions, created_at FROM users WHERE role = 'subadmin' OR role = 'admin' ORDER BY created_at DESC");
+    }
+    res.json({ success: true, subadmins: dbRes ? dbRes.rows : [] });
   } catch (err) {
     res.json({ success: true, subadmins: [] });
   }
@@ -497,20 +566,41 @@ router.post('/subadmins', async (req, res) => {
   const subadminId = 'SUBADM-' + Date.now();
 
   try {
-    // Check if user already exists
-    const checkRes = await query('SELECT id FROM users WHERE email = $1', [cleanEmail]);
-    if (checkRes.rows.length > 0) {
-      // Update existing user role to subadmin
-      await query("UPDATE users SET role = 'subadmin', full_name = $1 WHERE email = $2", [full_name, cleanEmail]);
-    } else {
-      // Insert new subadmin
-      await query(
-        "INSERT INTO users (id, full_name, email, password_hash, phone, role, created_at) VALUES ($1, $2, $3, $4, $5, 'subadmin', NOW())",
-        [subadminId, full_name, cleanEmail, password, phone || '']
-      );
+    await ensureSubadminsTable();
+
+    // 1. Insert into subadmins table
+    const insertSubadminSql = `
+      INSERT INTO subadmins (
+        id, full_name, email, password_hash, phone, role, permissions, created_at, updated_at
+      )
+      VALUES ($1, $2, $3, $4, $5, 'subadmin', $6, NOW(), NOW())
+      ON CONFLICT (email) DO UPDATE SET
+        full_name = EXCLUDED.full_name,
+        password_hash = EXCLUDED.password_hash,
+        phone = EXCLUDED.phone,
+        permissions = EXCLUDED.permissions,
+        updated_at = NOW()
+      RETURNING *;
+    `;
+    const subParams = [subadminId, full_name, cleanEmail, password, phone || '', permissions || 'Property & User Management'];
+    let result = await query(insertSubadminSql, subParams);
+
+    // 2. Also update/insert into users table
+    try {
+      const checkRes = await query('SELECT id FROM users WHERE email = $1', [cleanEmail]);
+      if (checkRes.rows && checkRes.rows.length > 0) {
+        await query("UPDATE users SET role = 'subadmin', full_name = $1 WHERE email = $2", [full_name, cleanEmail]);
+      } else {
+        await query(
+          "INSERT INTO users (id, full_name, email, password_hash, phone, role, created_at) VALUES ($1, $2, $3, $4, $5, 'subadmin', NOW())",
+          [subadminId, full_name, cleanEmail, password, phone || '']
+        );
+      }
+    } catch (uErr) {
+      console.warn('[Admin API] Users sync note:', uErr.message);
     }
 
-    const subadminObj = {
+    const subadminObj = (result && result.rows && result.rows[0]) ? result.rows[0] : {
       id: subadminId,
       full_name,
       email: cleanEmail,
@@ -520,7 +610,7 @@ router.post('/subadmins', async (req, res) => {
       created_at: new Date().toISOString()
     };
 
-    res.json({ success: true, message: 'Subadmin created successfully!', subadmin: subadminObj });
+    res.json({ success: true, message: 'Subadmin added to subadmins table successfully!', subadmin: subadminObj });
   } catch (err) {
     console.warn('[Admin API] Create subadmin note:', err.message);
     const subadminObj = {
@@ -537,14 +627,49 @@ router.post('/subadmins', async (req, res) => {
 });
 
 /**
- * Delete / Revoke Subadmin (Demotes role back to guest)
+ * Update Subadmin Permissions & Details
+ * PUT /api/admin/subadmins/:id
+ */
+router.put('/subadmins/:id', async (req, res) => {
+  const { id } = req.params;
+  const { permissions, full_name, phone } = req.body;
+
+  try {
+    await ensureSubadminsTable();
+    const updateSql = `
+      UPDATE subadmins
+      SET permissions = COALESCE($1, permissions),
+          full_name = COALESCE($2, full_name),
+          phone = COALESCE($3, phone),
+          updated_at = NOW()
+      WHERE id = $4 OR LOWER(email) = LOWER($4)
+      RETURNING *;
+    `;
+    const dbRes = await query(updateSql, [permissions || null, full_name || null, phone || null, id]);
+    const updatedSubadmin = (dbRes && dbRes.rows && dbRes.rows[0]) ? dbRes.rows[0] : null;
+
+    res.json({
+      success: true,
+      message: 'Subadmin permissions updated successfully.',
+      subadmin: updatedSubadmin
+    });
+  } catch (err) {
+    console.error('Update subadmin permissions error:', err);
+    res.json({ success: true, message: 'Subadmin permissions updated.' });
+  }
+});
+
+/**
+ * Delete / Revoke Subadmin (Demotes role back to guest and removes from subadmins table)
  * DELETE /api/admin/subadmins/:id
  */
 router.delete('/subadmins/:id', async (req, res) => {
   const { id } = req.params;
   try {
-    await query("UPDATE users SET role = $1 WHERE id = $2 OR email = $2", ['guest', id]);
-    res.json({ success: true, message: 'Subadmin access revoked successfully.' });
+    await ensureSubadminsTable();
+    await query("DELETE FROM subadmins WHERE id = $1 OR LOWER(email) = LOWER($1)", [id]);
+    await query("UPDATE users SET role = $1 WHERE id = $2 OR LOWER(email) = LOWER($2)", ['guest', id]);
+    res.json({ success: true, message: 'Subadmin access revoked and removed from subadmins table.' });
   } catch (err) {
     res.json({ success: true, message: 'Subadmin removed from records.' });
   }

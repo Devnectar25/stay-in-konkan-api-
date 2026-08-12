@@ -31,11 +31,14 @@ const detectTable = (text) => {
   const fromMatch = lower.match(/\bfrom\s+([a-z0-9_]+)/);
   if (fromMatch && fromMatch[1]) {
     const mainTable = fromMatch[1].trim();
-    if (['properties', 'host_applications', 'users', 'bookings', 'contact_messages', 'newsletter_subscribers', 'cancellations', 'reviews', 'wishlists'].includes(mainTable)) {
+    if (['properties', 'host_applications', 'users', 'bookings', 'contact_messages', 'newsletter_subscribers', 'cancellations', 'cancel_bookings', 'subadmins', 'reviews', 'wishlists', 'coupons'].includes(mainTable)) {
       return mainTable;
     }
   }
 
+  if (lower.includes('coupons')) return 'coupons';
+  if (lower.includes('subadmins')) return 'subadmins';
+  if (lower.includes('cancel_bookings')) return 'cancel_bookings';
   if (lower.includes('bookings')) return 'bookings';
   if (lower.includes('properties')) return 'properties';
   if (lower.includes('host_applications')) return 'host_applications';
@@ -278,8 +281,8 @@ export const query = async (text, params = []) => {
           }
         }
 
-        // 4.5 INSERT Cancellations Fallback
-        if (lower.startsWith('insert into cancellations')) {
+        // 4.5 INSERT Cancellations & Cancel Bookings Fallback
+        if (lower.startsWith('insert into cancel_bookings') || lower.startsWith('insert into cancellations')) {
           const body = {
             id: params[0] || undefined,
             booking_id: params[1] || undefined,
@@ -296,7 +299,8 @@ export const query = async (text, params = []) => {
             status: params[12] || 'pending',
             refund_status: 'pending'
           };
-          const restRes = await fetch(`${SUPABASE_URL}/rest/v1/cancellations`, {
+          const targetEndpoint = lower.includes('cancel_bookings') ? 'cancel_bookings' : 'cancellations';
+          const restRes = await fetch(`${SUPABASE_URL}/rest/v1/${targetEndpoint}`, {
             method: 'POST',
             headers,
             body: JSON.stringify(body)
@@ -306,7 +310,166 @@ export const query = async (text, params = []) => {
             return { rows: Array.isArray(rows) ? rows : [rows], rowCount: 1 };
           } else {
             const errText = await restRes.text().catch(() => '');
-            console.warn('Supabase cancellation insert error:', restRes.status, errText);
+            console.warn(`Supabase ${targetEndpoint} insert error:`, restRes.status, errText);
+          }
+        }
+
+        // 4.8 INSERT Subadmins Fallback
+        if (lower.startsWith('insert into subadmins')) {
+          const body = {
+            id: params[0] || undefined,
+            full_name: params[1] || undefined,
+            email: params[2] || undefined,
+            password_hash: params[3] || undefined,
+            phone: params[4] || '',
+            role: 'subadmin',
+            permissions: params[5] || 'Property & User Management'
+          };
+          const restRes = await fetch(`${SUPABASE_URL}/rest/v1/subadmins`, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify(body)
+          });
+          if (restRes.ok) {
+            const rows = await restRes.json();
+            return { rows: Array.isArray(rows) ? rows : [rows], rowCount: 1 };
+          }
+        }
+
+        // 4.9 UPDATE Subadmins Fallback
+        if (lower.startsWith('update subadmins')) {
+          const permissions = params[0];
+          const full_name = params[1];
+          const phone = params[2];
+          const id = params[3];
+          const updateBody = {};
+          if (permissions) updateBody.permissions = permissions;
+          if (full_name) updateBody.full_name = full_name;
+          if (phone) updateBody.phone = phone;
+
+          const restRes = await fetch(`${SUPABASE_URL}/rest/v1/subadmins?or=(id.eq.${id},email.eq.${id})`, {
+            method: 'PATCH',
+            headers,
+            body: JSON.stringify(updateBody)
+          });
+          if (restRes.ok) {
+            const rows = await restRes.json();
+            return { rows: Array.isArray(rows) ? rows : [rows], rowCount: 1 };
+          }
+        }
+
+        // 4.10 DELETE Subadmins Fallback
+        if (lower.startsWith('delete from subadmins')) {
+          const id = params[0];
+          const restRes = await fetch(`${SUPABASE_URL}/rest/v1/subadmins?or=(id.eq.${id},email.eq.${id})`, {
+            method: 'DELETE',
+            headers
+          });
+          if (restRes.ok) {
+            return { rows: [], rowCount: 1 };
+          }
+        }
+
+        // 4.11 INSERT Coupons Fallback
+        if (lower.startsWith('insert into coupons')) {
+          const body = {
+            id: params[0] || `COUP-${Date.now()}`,
+            code: params[1] || undefined,
+            discount_type: params[2] || 'percentage',
+            discount_value: params[3] !== undefined ? Number(params[3]) : 0,
+            min_booking: params[4] !== undefined ? Number(params[4]) : 0,
+            apply_to: params[5] || 'All Products',
+            max_uses: params[6] !== undefined ? Number(params[6]) : 100,
+            times_used: 0,
+            active: params[7] !== undefined ? Boolean(params[7]) : true,
+            is_private: params[8] !== undefined ? Boolean(params[8]) : false,
+            expiry: params[9] || '2026-12-31'
+          };
+
+          let restRes = await fetch(`${SUPABASE_URL}/rest/v1/coupons`, {
+            method: 'POST',
+            headers: {
+              ...headers,
+              'Prefer': 'resolution=merge-duplicates,return=representation'
+            },
+            body: JSON.stringify(body)
+          });
+
+          if (!restRes.ok) {
+            // Fallback to core columns if PostgREST cache lacks new columns
+            const baseBody = {
+              id: body.id,
+              code: body.code,
+              discount_type: body.discount_type,
+              discount_value: body.discount_value,
+              min_booking: body.min_booking,
+              max_uses: body.max_uses,
+              times_used: 0,
+              active: body.active,
+              expiry: body.expiry
+            };
+            restRes = await fetch(`${SUPABASE_URL}/rest/v1/coupons`, {
+              method: 'POST',
+              headers: {
+                ...headers,
+                'Prefer': 'resolution=merge-duplicates,return=representation'
+              },
+              body: JSON.stringify(baseBody)
+            });
+          }
+
+          if (restRes.ok) {
+            const rows = await restRes.json();
+            const returnedRow = Array.isArray(rows) ? rows[0] : rows;
+            return { rows: [{ ...body, ...(returnedRow || {}) }], rowCount: 1 };
+          } else {
+            const errText = await restRes.text().catch(() => '');
+            console.warn('[DB Fallback] Supabase coupons insert note:', restRes.status, errText);
+            return { rows: [body], rowCount: 1 };
+          }
+        }
+
+        // 4.12 UPDATE Coupons Fallback
+        if (lower.startsWith('update coupons')) {
+          const idOrCode = params[1] || params[0];
+
+          if (lower.includes('times_used = coalesce(times_used, 0) + 1') || lower.includes('times_used = times_used + 1')) {
+            const fetchRes = await fetch(`${SUPABASE_URL}/rest/v1/coupons?or=(id.eq.${idOrCode},code.eq.${idOrCode})`, { headers });
+            if (fetchRes.ok) {
+              const rows = await fetchRes.json();
+              if (rows && rows.length > 0) {
+                const c = rows[0];
+                const newTimesUsed = (c.times_used || 0) + 1;
+                await fetch(`${SUPABASE_URL}/rest/v1/coupons?or=(id.eq.${idOrCode},code.eq.${idOrCode})`, {
+                  method: 'PATCH',
+                  headers,
+                  body: JSON.stringify({ times_used: newTimesUsed })
+                });
+                return { rows: [{ ...c, times_used: newTimesUsed }], rowCount: 1 };
+              }
+            }
+          }
+
+          const restRes = await fetch(`${SUPABASE_URL}/rest/v1/coupons?or=(id.eq.${idOrCode},code.eq.${idOrCode})`, {
+            method: 'PATCH',
+            headers,
+            body: JSON.stringify({ active: params[0] })
+          });
+          if (restRes.ok) {
+            const rows = await restRes.json();
+            return { rows: Array.isArray(rows) ? rows : [rows], rowCount: 1 };
+          }
+        }
+
+        // 4.13 DELETE Coupons Fallback
+        if (lower.startsWith('delete from coupons')) {
+          const idOrCode = params[0];
+          const restRes = await fetch(`${SUPABASE_URL}/rest/v1/coupons?or=(id.eq.${idOrCode},code.eq.${idOrCode},code.ilike.${idOrCode})`, {
+            method: 'DELETE',
+            headers
+          });
+          if (restRes.ok) {
+            return { rows: [], rowCount: 1 };
           }
         }
 

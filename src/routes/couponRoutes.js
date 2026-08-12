@@ -15,12 +15,16 @@ async function ensureTableExists() {
         discount_type VARCHAR(50) DEFAULT 'percentage',
         discount_value NUMERIC(10, 2) NOT NULL,
         min_booking NUMERIC(10, 2) DEFAULT 0,
+        apply_to VARCHAR(100) DEFAULT 'All Products',
         max_uses INT DEFAULT 100,
         times_used INT DEFAULT 0,
         active BOOLEAN DEFAULT true,
+        is_private BOOLEAN DEFAULT false,
         expiry VARCHAR(50) DEFAULT '2026-12-31',
         created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
       );
+      ALTER TABLE coupons ADD COLUMN IF NOT EXISTS apply_to VARCHAR(100) DEFAULT 'All Products';
+      ALTER TABLE coupons ADD COLUMN IF NOT EXISTS is_private BOOLEAN DEFAULT false;
     `);
 
     // Seed default coupons if table is empty
@@ -30,11 +34,11 @@ async function ensureTableExists() {
 
     if (count === 0) {
       const seedSql = `
-        INSERT INTO coupons (id, code, discount_type, discount_value, min_booking, max_uses, times_used, active, expiry)
+        INSERT INTO coupons (id, code, discount_type, discount_value, min_booking, apply_to, max_uses, times_used, active, is_private, expiry)
         VALUES
-          ('COUP-1', 'KONKAN20', 'percentage', 20, 2000, 100, 14, true, '2026-12-31'),
-          ('COUP-2', 'WELCOME500', 'flat', 500, 1500, 50, 8, true, '2026-09-30'),
-          ('COUP-3', 'MONSOON15', 'percentage', 15, 2500, 200, 32, true, '2026-10-15')
+          ('COUP-1', 'SUMMER25', 'percentage', 25, 1500, 'All Products', 100, 14, true, false, '2026-12-31'),
+          ('COUP-2', 'WELCOME500', 'flat', 500, 1500, 'First Time Guests', 50, 8, true, false, '2026-09-30'),
+          ('COUP-3', 'MONSOON15', 'percentage', 15, 2500, 'Selected Stays Only', 200, 32, true, true, '2026-10-15')
         ON CONFLICT (code) DO NOTHING;
       `;
       await query(seedSql);
@@ -75,22 +79,28 @@ router.post('/', async (req, res) => {
     discountValue,
     min_booking,
     minBooking,
+    apply_to,
+    applyTo,
     max_uses,
     maxUses,
+    is_private,
+    isPrivate,
     expiry,
     active
   } = req.body;
 
-  if (!code || (!discount_value && !discountValue)) {
+  if (!code || (discount_value === undefined && discountValue === undefined)) {
     return res.status(400).json({ success: false, message: 'Coupon code and discount value are required.' });
   }
 
   const finalId = id || `COUP-${Date.now()}`;
   const finalCode = String(code).toUpperCase().trim();
   const finalType = discount_type || discountType || 'percentage';
-  const finalValue = parseFloat(discount_value || discountValue || 0);
-  const finalMinBooking = parseFloat(min_booking || minBooking || 0);
-  const finalMaxUses = parseInt(max_uses || maxUses || 100, 10);
+  const finalValue = parseFloat(discount_value !== undefined ? discount_value : (discountValue || 0));
+  const finalMinBooking = parseFloat(min_booking !== undefined ? min_booking : (minBooking || 0));
+  const finalApplyTo = apply_to || applyTo || 'All Products';
+  const finalMaxUses = parseInt(max_uses !== undefined ? max_uses : (maxUses || 100), 10);
+  const finalIsPrivate = is_private !== undefined ? Boolean(is_private) : (isPrivate !== undefined ? Boolean(isPrivate) : false);
   const finalExpiry = expiry || '2026-12-31';
   const finalActive = active !== undefined ? Boolean(active) : true;
 
@@ -99,15 +109,17 @@ router.post('/', async (req, res) => {
 
     const insertSql = `
       INSERT INTO coupons (
-        id, code, discount_type, discount_value, min_booking, max_uses, times_used, active, expiry, created_at
+        id, code, discount_type, discount_value, min_booking, apply_to, max_uses, times_used, active, is_private, expiry, created_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, 0, $7, $8, NOW())
+      VALUES ($1, $2, $3, $4, $5, $6, $7, 0, $8, $9, $10, NOW())
       ON CONFLICT (code) DO UPDATE SET
         discount_type = EXCLUDED.discount_type,
         discount_value = EXCLUDED.discount_value,
         min_booking = EXCLUDED.min_booking,
+        apply_to = EXCLUDED.apply_to,
         max_uses = EXCLUDED.max_uses,
         active = EXCLUDED.active,
+        is_private = EXCLUDED.is_private,
         expiry = EXCLUDED.expiry
       RETURNING *;
     `;
@@ -118,8 +130,10 @@ router.post('/', async (req, res) => {
       finalType,
       finalValue,
       finalMinBooking,
+      finalApplyTo,
       finalMaxUses,
       finalActive,
+      finalIsPrivate,
       finalExpiry
     ]);
 
@@ -240,6 +254,39 @@ router.post('/validate', async (req, res) => {
   } catch (error) {
     console.error('Validate coupon error:', error);
     return res.json({ success: false, message: 'Could not validate coupon.' });
+  }
+});
+
+/**
+ * POST /api/coupons/use
+ * Increment coupon usage count when booking is placed
+ */
+router.post('/use', async (req, res) => {
+  const { code, id } = req.body;
+  const target = (id || code || '').trim();
+  if (!target) {
+    return res.status(400).json({ success: false, message: 'Coupon code or ID is required.' });
+  }
+
+  try {
+    await ensureTableExists();
+    const updateSql = `
+      UPDATE coupons
+      SET times_used = COALESCE(times_used, 0) + 1
+      WHERE id = $1 OR UPPER(code) = UPPER($1)
+      RETURNING *;
+    `;
+    const result = await query(updateSql, [target]);
+    const updatedCoupon = (result && result.rows && result.rows[0]) ? result.rows[0] : null;
+
+    return res.json({
+      success: true,
+      message: 'Coupon usage recorded.',
+      coupon: updatedCoupon
+    });
+  } catch (error) {
+    console.error('Use coupon error:', error);
+    return res.json({ success: true, message: 'Coupon usage recorded (fallback).' });
   }
 });
 
