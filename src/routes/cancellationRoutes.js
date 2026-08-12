@@ -4,7 +4,7 @@ import { query } from '../db.js';
 const router = express.Router();
 
 /**
- * Auto-ensure cancellations table exists in database
+ * Auto-ensure cancellations and cancel_bookings tables exist in database
  */
 const ensureTableExists = async () => {
   try {
@@ -28,9 +28,32 @@ const ensureTableExists = async () => {
         created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
       );
     `);
+    await query(`
+      CREATE TABLE IF NOT EXISTS cancel_bookings (
+        id VARCHAR(255) PRIMARY KEY,
+        booking_id VARCHAR(255) NOT NULL,
+        user_email VARCHAR(255) NOT NULL,
+        user_name VARCHAR(255),
+        property_name VARCHAR(255),
+        check_in VARCHAR(100),
+        check_out VARCHAR(100),
+        paid_amount NUMERIC(10, 2) DEFAULT 0,
+        refund_amount NUMERIC(10, 2) DEFAULT 0,
+        refund_percentage INT DEFAULT 0,
+        notice_days INT DEFAULT 0,
+        cancellation_reason TEXT DEFAULT 'Guest requested cancellation',
+        status VARCHAR(50) DEFAULT 'requested',
+        refund_status VARCHAR(50) DEFAULT 'pending',
+        refund_txn_id VARCHAR(255),
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+      );
+    `);
     try {
       await query(`ALTER TABLE cancellations ADD COLUMN IF NOT EXISTS refund_status VARCHAR(50) DEFAULT 'pending';`);
       await query(`ALTER TABLE cancellations ADD COLUMN IF NOT EXISTS refund_txn_id VARCHAR(255);`);
+      await query(`ALTER TABLE cancel_bookings ADD COLUMN IF NOT EXISTS refund_status VARCHAR(50) DEFAULT 'pending';`);
+      await query(`ALTER TABLE cancel_bookings ADD COLUMN IF NOT EXISTS refund_txn_id VARCHAR(255);`);
     } catch (colErr) {}
   } catch (e) {
     console.warn('[Cancellations API] Table check note:', e.message);
@@ -90,15 +113,16 @@ router.post('/', async (req, res) => {
   try {
     await ensureTableExists();
 
-    const insertSql = `
-      INSERT INTO cancellations (
-        id, booking_id, user_email, user_name, property_name, check_in, check_out, paid_amount, refund_amount, refund_percentage, notice_days, cancellation_reason, status, created_at
+    // 1. Insert into cancel_bookings table
+    const insertCancelBookingsSql = `
+      INSERT INTO cancel_bookings (
+        id, booking_id, user_email, user_name, property_name, check_in, check_out, paid_amount, refund_amount, refund_percentage, notice_days, cancellation_reason, status, refund_status, created_at, updated_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW())
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'pending', NOW(), NOW())
       RETURNING *;
     `;
 
-    const result = await query(insertSql, [
+    const cancelBookingsParams = [
       finalId,
       finalBookingId,
       finalUserEmail,
@@ -112,7 +136,25 @@ router.post('/', async (req, res) => {
       finalDays,
       finalReason,
       finalStatus
-    ]);
+    ];
+
+    let result = await query(insertCancelBookingsSql, cancelBookingsParams);
+
+    // 2. Also insert into cancellations for full backwards compatibility
+    try {
+      const insertCancellationsSql = `
+        INSERT INTO cancellations (
+          id, booking_id, user_email, user_name, property_name, check_in, check_out, paid_amount, refund_amount, refund_percentage, notice_days, cancellation_reason, status, refund_status, created_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'pending', NOW())
+        ON CONFLICT (id) DO UPDATE SET
+          refund_amount = EXCLUDED.refund_amount,
+          status = EXCLUDED.status;
+      `;
+      await query(insertCancellationsSql, cancelBookingsParams);
+    } catch (cErr) {
+      console.warn('[Cancellations API] Cancellations sync note:', cErr.message);
+    }
 
     // Update booking status in bookings table based on cancellation status
     try {
@@ -127,8 +169,23 @@ router.post('/', async (req, res) => {
 
     return res.json({
       success: true,
-      message: 'Cancellation logged successfully in database',
-      cancellation: result.rows[0]
+      message: 'Cancellation logged successfully in cancel_bookings table',
+      cancellation: (result && result.rows && result.rows[0]) ? result.rows[0] : {
+        id: finalId,
+        booking_id: finalBookingId,
+        user_email: finalUserEmail,
+        user_name: finalUserName,
+        property_name: finalProperty,
+        check_in: finalCheckIn,
+        check_out: finalCheckOut,
+        paid_amount: finalPaid,
+        refund_amount: finalRefund,
+        refund_percentage: finalPct,
+        notice_days: finalDays,
+        cancellation_reason: finalReason,
+        status: finalStatus,
+        refund_status: 'pending'
+      }
     });
   } catch (error) {
     console.error('Create cancellation error:', error);
@@ -149,6 +206,7 @@ router.post('/', async (req, res) => {
         notice_days: finalDays,
         cancellation_reason: finalReason,
         status: finalStatus,
+        refund_status: 'pending',
         created_at: new Date().toISOString()
       }
     });
@@ -172,6 +230,10 @@ router.put('/:id/status', async (req, res) => {
 
   try {
     await ensureTableExists();
+    await query(
+      'UPDATE cancel_bookings SET status = $1, updated_at = NOW() WHERE id = $2 OR booking_id = $2',
+      [status, id]
+    );
     await query(
       'UPDATE cancellations SET status = $1 WHERE id = $2 OR booking_id = $2',
       [status, id]
@@ -202,6 +264,10 @@ router.put('/:id/refund-payout', async (req, res) => {
   try {
     await ensureTableExists();
     await query(
+      'UPDATE cancel_bookings SET refund_status = $1, refund_txn_id = $2, refund_amount = COALESCE($3, refund_amount), updated_at = NOW() WHERE id = $4 OR booking_id = $4',
+      [refund_status || 'refunded', refund_txn_id || `REFUND-${Date.now()}`, refund_amount || null, id]
+    );
+    await query(
       'UPDATE cancellations SET refund_status = $1, refund_txn_id = $2, refund_amount = COALESCE($3, refund_amount) WHERE id = $4 OR booking_id = $4',
       [refund_status || 'refunded', refund_txn_id || `REFUND-${Date.now()}`, refund_amount || null, id]
     );
@@ -220,8 +286,11 @@ router.put('/:id/refund-payout', async (req, res) => {
 router.get('/', async (req, res) => {
   try {
     await ensureTableExists();
-    const result = await query('SELECT * FROM cancellations ORDER BY created_at DESC');
-    return res.json({ success: true, count: result.rowCount, cancellations: result.rows });
+    let result = await query('SELECT * FROM cancel_bookings ORDER BY created_at DESC');
+    if (!result || !result.rows || result.rows.length === 0) {
+      result = await query('SELECT * FROM cancellations ORDER BY created_at DESC');
+    }
+    return res.json({ success: true, count: result ? result.rowCount : 0, cancellations: result ? result.rows : [] });
   } catch (error) {
     console.error('Fetch cancellations error:', error);
     return res.json({ success: true, count: 0, cancellations: [] });
@@ -236,8 +305,11 @@ router.get('/user/:email', async (req, res) => {
   const { email } = req.params;
   try {
     await ensureTableExists();
-    const result = await query('SELECT * FROM cancellations WHERE LOWER(user_email) = LOWER($1) ORDER BY created_at DESC', [email]);
-    return res.json({ success: true, count: result.rowCount, cancellations: result.rows });
+    let result = await query('SELECT * FROM cancel_bookings WHERE LOWER(user_email) = LOWER($1) ORDER BY created_at DESC', [email]);
+    if (!result || !result.rows || result.rows.length === 0) {
+      result = await query('SELECT * FROM cancellations WHERE LOWER(user_email) = LOWER($1) ORDER BY created_at DESC', [email]);
+    }
+    return res.json({ success: true, count: result ? result.rowCount : 0, cancellations: result ? result.rows : [] });
   } catch (error) {
     console.error('Fetch user cancellations error:', error);
     return res.json({ success: true, count: 0, cancellations: [] });
@@ -254,6 +326,7 @@ router.delete('/:id', async (req, res) => {
 
   try {
     await ensureTableExists();
+    await query('DELETE FROM cancel_bookings WHERE id = $1 OR booking_id = $1', [cleanId]);
     await query('DELETE FROM cancellations WHERE id = $1 OR booking_id = $1', [cleanId]);
     return res.json({ success: true, message: `Cancellation ${cleanId} deleted successfully.` });
   } catch (error) {
