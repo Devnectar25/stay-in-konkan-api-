@@ -286,14 +286,34 @@ router.put('/:id/refund-payout', async (req, res) => {
 router.get('/', async (req, res) => {
   try {
     await ensureTableExists();
-    let result = await query('SELECT * FROM cancel_bookings ORDER BY created_at DESC');
-    if (!result || !result.rows || result.rows.length === 0) {
-      result = await query('SELECT * FROM cancellations ORDER BY created_at DESC');
-    }
-    return res.json({ success: true, count: result ? result.rowCount : 0, cancellations: result ? result.rows : [] });
+    const res1 = await query('SELECT * FROM cancellations ORDER BY created_at DESC');
+    const res2 = await query('SELECT * FROM cancel_bookings ORDER BY created_at DESC');
+
+    const cancMap = new Map();
+    (res1.rows || []).forEach(item => {
+      const key = String(item.id || item.booking_id || '').toLowerCase().trim();
+      if (key) cancMap.set(key, item);
+    });
+    (res2.rows || []).forEach(item => {
+      const key = String(item.id || item.booking_id || '').toLowerCase().trim();
+      if (key && !cancMap.has(key)) cancMap.set(key, item);
+    });
+
+    const allCancellations = Array.from(cancMap.values()).sort((a, b) => {
+      const timeA = new Date(a.created_at || a.requested_at || a.date || a.timestamp || 0).getTime();
+      const timeB = new Date(b.created_at || b.requested_at || b.date || b.timestamp || 0).getTime();
+      return timeB - timeA;
+    });
+
+    return res.json({
+      success: true,
+      count: allCancellations.length,
+      cancellations: allCancellations,
+      data: allCancellations
+    });
   } catch (error) {
     console.error('Fetch cancellations error:', error);
-    return res.json({ success: true, count: 0, cancellations: [] });
+    return res.json({ success: true, count: 0, cancellations: [], data: [] });
   }
 });
 

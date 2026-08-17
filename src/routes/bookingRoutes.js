@@ -68,8 +68,7 @@ router.post('/', async (req, res) => {
   await ensureBookingsTable();
 
   const finalBookingId = booking_id || id || `SIK-${Math.floor(100000 + Math.random() * 900000)}`;
-  const isValidUuid = (str) => typeof str === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str);
-  const uuid = isValidUuid(req.body.id) ? req.body.id : crypto.randomUUID();
+  const primaryId = id || booking_id || finalBookingId;
 
   const totalVal = Number(total_amount || total_price || 0);
   const paidVal = Number(paid_amount || totalVal);
@@ -83,9 +82,22 @@ router.post('/', async (req, res) => {
   const finalHostEmail = (host_email || req.body.owner_email || 'host@stayinkonkan.com').trim().toLowerCase();
   const finalHostName = (host_name || req.body.owner_name || 'Local Host').trim();
   const finalCheckIn = (check_in || '').trim();
-  const finalCheckOut = (check_out || '').trim();
-  const finalGuests = typeof guests === 'object' ? JSON.stringify(guests) : String(guests || '2 Guests');
-  const finalStatus = (status || payment_status || 'pending').trim().toLowerCase();
+  const parseRawGuests = (g) => {
+    if (typeof g === 'number') {
+      if (g === 21) return 2;
+      return g;
+    }
+    const str = String(g || '').trim();
+    const match = str.match(/^(\d+)/) || str.match(/(\d+)\s*guest/i);
+    if (match) {
+      const n = parseInt(match[1], 10);
+      if (n === 21 && str.includes('1 Room')) return 2;
+      if (!isNaN(n) && n > 0) return n;
+    }
+    return 2;
+  };
+  const finalGuests = parseRawGuests(guests);
+  const finalStatus = (status || 'pending').trim().toLowerCase();
   const finalPaymentId = (payment_id || '').trim();
 
   try {
@@ -98,15 +110,24 @@ router.post('/', async (req, res) => {
         booking_id = EXCLUDED.booking_id,
         user_email = EXCLUDED.user_email,
         user_name = EXCLUDED.user_name,
+        user_phone = EXCLUDED.user_phone,
+        property_id = EXCLUDED.property_id,
         property_name = EXCLUDED.property_name,
         host_email = EXCLUDED.host_email,
-        status = EXCLUDED.status,
-        payment_id = EXCLUDED.payment_id
+        host_name = EXCLUDED.host_name,
+        check_in = EXCLUDED.check_in,
+        check_out = EXCLUDED.check_out,
+        guests = EXCLUDED.guests,
+        total_amount = EXCLUDED.total_amount,
+        paid_amount = EXCLUDED.paid_amount,
+        remaining_amount = EXCLUDED.remaining_amount,
+        payment_id = EXCLUDED.payment_id,
+        status = EXCLUDED.status
       RETURNING *;
     `;
 
     const params = [
-      uuid,
+      primaryId,
       finalBookingId,
       finalUserEmail,
       finalUserName,
@@ -140,18 +161,25 @@ router.post('/', async (req, res) => {
 
 /**
  * GET /api/bookings/user/:userEmail
- * Raw SQL query to fetch all bookings for a user by email
+ * Raw SQL query to fetch all bookings for a user by email or name
  */
 router.get('/user/:userEmail', async (req, res) => {
   const { userEmail } = req.params;
 
   try {
+    await ensureBookingsTable();
+    const cleanParam = (userEmail || '').trim().toLowerCase();
     const rawSql = `
       SELECT * FROM bookings
-      WHERE LOWER(user_email) = LOWER($1) OR id = $1 OR booking_id = $1
+      WHERE LOWER(COALESCE(user_email, '')) = $1
+         OR LOWER(COALESCE(guest_email, '')) = $1
+         OR LOWER(COALESCE(user_name, '')) = $1
+         OR LOWER(COALESCE(guest_name, '')) = $1
+         OR id = $1
+         OR booking_id = $1
       ORDER BY created_at DESC;
     `;
-    const result = await query(rawSql, [userEmail]);
+    const result = await query(rawSql, [cleanParam]);
 
     return res.json({ success: true, count: result.rowCount, bookings: result.rows });
   } catch (error) {
@@ -217,6 +245,76 @@ router.put('/:id/status', async (req, res) => {
       'UPDATE bookings SET status = $1 WHERE id = $2 OR booking_id = $2 OR payment_id = $2',
       [status, id]
     );
+
+    // If status is updated to cancelled, check and auto-create cancellation records
+    if (status === 'cancelled') {
+      try {
+        const bookingRes = await query(
+          'SELECT * FROM bookings WHERE id = $1 OR booking_id = $1 OR payment_id = $1',
+          [id]
+        );
+        if (bookingRes && bookingRes.rows && bookingRes.rows.length > 0) {
+          const booking = bookingRes.rows[0];
+          const bookingId = booking.booking_id || booking.id;
+
+          // Check if cancellation already exists
+          const cancelRes = await query(
+            'SELECT * FROM cancellations WHERE booking_id = $1 OR id = $2',
+            [bookingId, booking.id]
+          );
+
+          if (!cancelRes || !cancelRes.rows || cancelRes.rows.length === 0) {
+            const cncId = `CNC-${Math.floor(100000 + Math.random() * 900000)}`;
+            const paidAmount = parseFloat(booking.paid_amount || 0);
+
+            // Insert into cancel_bookings
+            await query(
+              `INSERT INTO cancel_bookings (
+                id, booking_id, user_email, user_name, property_name, check_in, check_out, paid_amount, refund_amount, refund_percentage, cancellation_reason, status, refund_status, created_at, updated_at
+              ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'pending', NOW(), NOW())`,
+              [
+                cncId,
+                bookingId,
+                booking.user_email || 'guest@example.com',
+                booking.user_name || 'Guest User',
+                booking.property_name || 'Konkan Homestay',
+                booking.check_in || '',
+                booking.check_out || '',
+                paidAmount,
+                paidAmount,
+                100,
+                'Cancelled by Admin/System',
+                'approved'
+              ]
+            );
+
+            // Insert into cancellations
+            await query(
+              `INSERT INTO cancellations (
+                id, booking_id, user_email, user_name, property_name, check_in, check_out, paid_amount, refund_amount, refund_percentage, cancellation_reason, status, refund_status, created_at
+              ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'pending', NOW())`,
+              [
+                cncId,
+                bookingId,
+                booking.user_email || 'guest@example.com',
+                booking.user_name || 'Guest User',
+                booking.property_name || 'Konkan Homestay',
+                booking.check_in || '',
+                booking.check_out || '',
+                paidAmount,
+                paidAmount,
+                100,
+                'Cancelled by Admin/System',
+                'approved'
+              ]
+            );
+          }
+        }
+      } catch (cncErr) {
+        console.error('Error auto-creating cancellation record:', cncErr);
+      }
+    }
+
     return res.json({ success: true, message: `Booking ${id} status updated to ${status}.` });
   } catch (error) {
     console.error('Update booking status error:', error);

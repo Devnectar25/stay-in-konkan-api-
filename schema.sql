@@ -142,5 +142,101 @@ CREATE TABLE IF NOT EXISTS coupons (
 
 CREATE INDEX IF NOT EXISTS idx_coupons_code ON coupons(code);
 
+-- 9. Create Help Desk Issues Table
+CREATE TABLE IF NOT EXISTS issue (
+    id VARCHAR(255) PRIMARY KEY,
+    issue_id VARCHAR(255) UNIQUE NOT NULL,
+    title VARCHAR(255) NOT NULL,
+    description TEXT,
+    category VARCHAR(100) DEFAULT 'General',
+    user_name VARCHAR(255),
+    user_email VARCHAR(255),
+    user_phone VARCHAR(50),
+    priority VARCHAR(50) DEFAULT 'Medium',
+    status VARCHAR(50) DEFAULT 'Open',
+    admin_notes TEXT,
+    comments TEXT DEFAULT '[]',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
 
+CREATE INDEX IF NOT EXISTS idx_issue_created_at ON issue(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_issue_status ON issue(status);
+CREATE INDEX IF NOT EXISTS idx_issue_priority ON issue(priority);
 
+-- 10. Create Application Errors Table
+CREATE TABLE IF NOT EXISTS application_errors (
+    id VARCHAR(255) PRIMARY KEY,
+    error_id VARCHAR(255) UNIQUE NOT NULL,
+    message TEXT NOT NULL,
+    error_type VARCHAR(100) DEFAULT 'UnhandledError',
+    stack_trace TEXT,
+    endpoint TEXT,
+    http_method VARCHAR(20),
+    status_code INT DEFAULT 500,
+    user_id VARCHAR(255),
+    user_email VARCHAR(255),
+    browser TEXT,
+    device TEXT,
+    environment VARCHAR(50) DEFAULT 'production',
+    severity VARCHAR(50) DEFAULT 'Medium',
+    status VARCHAR(50) DEFAULT 'New',
+    resolved_at TIMESTAMP WITH TIME ZONE,
+    resolved_by VARCHAR(255),
+    developer_notes TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_app_errors_created_at ON application_errors(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_app_errors_severity ON application_errors(severity);
+CREATE INDEX IF NOT EXISTS idx_app_errors_status ON application_errors(status);
+
+-- 12. Create Wishlists Table
+CREATE TABLE IF NOT EXISTS wishlists (
+    id VARCHAR(255) PRIMARY KEY,
+    user_email VARCHAR(255) NOT NULL,
+    user_name VARCHAR(255),
+    property_id VARCHAR(255) NOT NULL,
+    property_title VARCHAR(255),
+    property_image TEXT,
+    property_location VARCHAR(255),
+    property_price VARCHAR(100),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_wishlists_user_email ON wishlists(user_email);
+CREATE INDEX IF NOT EXISTS idx_wishlists_property_id ON wishlists(property_id);
+
+-- 13. Create Contact Messages Table
+CREATE TABLE IF NOT EXISTS contact_messages (
+    id VARCHAR(255) PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
+    email VARCHAR(255) NOT NULL,
+    phone VARCHAR(50),
+    subject VARCHAR(255) DEFAULT 'General Inquiry',
+    message TEXT NOT NULL,
+    unread BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_contact_messages_email ON contact_messages(email);
+CREATE INDEX IF NOT EXISTS idx_contact_messages_unread ON contact_messages(unread);
+CREATE INDEX IF NOT EXISTS idx_contact_messages_created_at ON contact_messages(created_at DESC);
+
+-- 14. Create Platform Config Table
+CREATE TABLE IF NOT EXISTS platform_config (
+    id VARCHAR(100) PRIMARY KEY DEFAULT 'default',
+    key VARCHAR(100) UNIQUE,
+    value JSONB DEFAULT '{}'::jsonb,
+    token_percentage NUMERIC(5, 2) DEFAULT 20.00,
+    service_fee_percentage NUMERIC(5, 2) DEFAULT 5.00,
+    min_advance_percentage NUMERIC(5, 2) DEFAULT 20.00,
+    contact_email VARCHAR(255) DEFAULT 'support@stayinkonkan.com',
+    contact_phone VARCHAR(50) DEFAULT '+91 98000 00000',
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- Seed Initial Default Platform Config
+INSERT INTO platform_config (id, key, token_percentage, service_fee_percentage, min_advance_percentage, contact_email, contact_phone)
+VALUES ('default', 'general_settings', 20.00, 5.00, 20.00, 'support@stayinkonkan.com', '+91 98000 00000')
+ON CONFLICT (id) DO NOTHING;
