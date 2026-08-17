@@ -102,7 +102,7 @@ router.get('/stats', async (req, res) => {
     const totalPropsRes = await query('SELECT COUNT(*) as total FROM properties');
     const usersRes = await query("SELECT COUNT(*) as total, role FROM users GROUP BY role");
     const totalUsersRes = await query("SELECT COUNT(*) as total FROM users");
-    const bookingsRes = await query("SELECT COUNT(*) as total, SUM(COALESCE(total_amount, 0)) as volume FROM bookings");
+    const bookingsRes = await query("SELECT total_amount, paid_amount, total_price, status FROM bookings");
     let contactCount = 0;
     let subCount = 0;
     try {
@@ -114,8 +114,15 @@ router.get('/stats', async (req, res) => {
       subCount = parseInt(subs.rows[0]?.total || 0, 10);
     } catch (e) {}
 
-    const totalBookingsCount = parseInt(bookingsRes.rows[0]?.total || 0, 10);
-    const totalVolumeAmount = parseFloat(bookingsRes.rows[0]?.volume || 0);
+    const allBookingsRows = bookingsRes.rows || [];
+    const totalBookingsCount = allBookingsRows.length;
+    let totalVolumeAmount = 0;
+    allBookingsRows.forEach(b => {
+      const raw = b.total_amount || b.paid_amount || b.total_price || 0;
+      const num = typeof raw === 'number' ? raw : parseFloat(String(raw).replace(/[^\d.]/g, ''));
+      if (!isNaN(num) && num > 0) totalVolumeAmount += num;
+    });
+
     const totalPropsCount = parseInt(totalPropsRes.rows[0]?.total || 0, 10);
     const totalUsersCount = parseInt(totalUsersRes.rows[0]?.total || 0, 10);
 
@@ -124,7 +131,7 @@ router.get('/stats', async (req, res) => {
 
     propertiesRes.rows.forEach(row => {
       const st = (row.status || '').toLowerCase();
-      if (st === 'live' || st === 'active') liveCount += parseInt(row.total, 10);
+      if (st === 'live' || st === 'active' || st === 'approved') liveCount += parseInt(row.total, 10);
       if (st === 'pending') pendingCount += parseInt(row.total, 10);
     });
 
@@ -133,9 +140,11 @@ router.get('/stats', async (req, res) => {
     }
 
     const hostCount = parseInt(usersRes.rows.find(r => r.role === 'host')?.total || 0, 10);
+    const tokenEarnings = Math.round((totalVolumeAmount * 20) / 100);
 
     const stats = {
       totalVolume: totalVolumeAmount,
+      tokenEarnings: tokenEarnings,
       totalBookings: totalBookingsCount,
       totalProperties: totalPropsCount,
       pendingProperties: pendingCount,
@@ -156,7 +165,7 @@ router.get('/stats', async (req, res) => {
       if (supabaseUrl && supabaseKey) {
         const headers = { 'apikey': supabaseKey, 'Authorization': `Bearer ${supabaseKey}` };
         const [bookingsRes, propsRes, usersRes, msgsRes, subsRes] = await Promise.all([
-          fetch(`${supabaseUrl}/rest/v1/bookings?select=total_amount,paid_amount,status`, { headers }).then(r => r.json()).catch(() => []),
+          fetch(`${supabaseUrl}/rest/v1/bookings?select=total_amount,paid_amount,total_price,status`, { headers }).then(r => r.json()).catch(() => []),
           fetch(`${supabaseUrl}/rest/v1/properties?select=id,status`, { headers }).then(r => r.json()).catch(() => []),
           fetch(`${supabaseUrl}/rest/v1/users?select=id,role`, { headers }).then(r => r.json()).catch(() => []),
           fetch(`${supabaseUrl}/rest/v1/contact_messages?select=id`, { headers }).then(r => r.json()).catch(() => []),
@@ -168,7 +177,12 @@ router.get('/stats', async (req, res) => {
         const validUsers = Array.isArray(usersRes) ? usersRes : [];
 
         const totalBookings = validBookings.length;
-        const totalVolume = validBookings.reduce((sum, b) => sum + Number(b.total_amount || b.paid_amount || 0), 0);
+        let totalVolume = 0;
+        validBookings.forEach(b => {
+          const raw = b.total_amount || b.paid_amount || b.total_price || 0;
+          const num = typeof raw === 'number' ? raw : parseFloat(String(raw).replace(/[^\d.]/g, ''));
+          if (!isNaN(num) && num > 0) totalVolume += num;
+        });
 
         let liveCount = 0;
         let pendingCount = 0;
@@ -214,6 +228,97 @@ router.get('/stats', async (req, res) => {
         newsletterSubs: 5,
         tokenPercentage: 20
       }
+    });
+  }
+});
+
+/**
+ * Unified Full Dashboard Endpoint
+ * GET /api/admin/full-dashboard
+ * Returns stats, properties, users, applications, messages, subscribers, bookings, cancellations, coupons, subadmins in 1 single HTTP request
+ */
+router.get('/full-dashboard', async (req, res) => {
+  try {
+    const [
+      propsRes,
+      usersRes,
+      bookingsRes,
+      appsRes,
+      msgsRes,
+      subsRes,
+      cancelsRes,
+      couponsRes,
+      subsAdminsRes,
+      reviewsRes
+    ] = await Promise.all([
+      query('SELECT p.*, u.full_name as owner_name, u.email as owner_email FROM properties p LEFT JOIN users u ON p.host_email = u.email ORDER BY p.created_at DESC').catch(() => ({ rows: [] })),
+      query('SELECT id, full_name, email, role, verified, created_at FROM users ORDER BY created_at DESC').catch(() => ({ rows: [] })),
+      query('SELECT * FROM bookings ORDER BY created_at DESC').catch(() => ({ rows: [] })),
+      query('SELECT * FROM host_applications ORDER BY created_at DESC').catch(() => ({ rows: [] })),
+      query('SELECT * FROM contact_messages ORDER BY created_at DESC').catch(() => ({ rows: [] })),
+      query('SELECT * FROM newsletter_subscribers ORDER BY created_at DESC').catch(() => ({ rows: [] })),
+      query('SELECT * FROM cancellations ORDER BY created_at DESC').catch(() => ({ rows: [] })),
+      query('SELECT * FROM coupons ORDER BY created_at DESC').catch(() => ({ rows: [] })),
+      query('SELECT * FROM subadmins ORDER BY created_at DESC').catch(() => ({ rows: [] })),
+      query('SELECT * FROM reviews ORDER BY created_at DESC').catch(() => ({ rows: [] }))
+    ]);
+
+    const properties = propsRes.rows || [];
+    const users = usersRes.rows || [];
+    const bookings = bookingsRes.rows || [];
+    const applications = appsRes.rows || [];
+    const messages = msgsRes.rows || [];
+    const subscribers = subsRes.rows || [];
+    const cancellations = cancelsRes.rows || [];
+    const coupons = couponsRes.rows || [];
+    const subadmins = subsAdminsRes.rows || [];
+    const reviews = reviewsRes.rows || [];
+
+    const totalVolume = bookings.reduce((sum, b) => sum + parseFloat(b.total_amount || b.paid_amount || b.total_price || 0), 0);
+    let liveProps = 0;
+    let pendingProps = 0;
+    properties.forEach(p => {
+      const st = (p.status || '').toLowerCase();
+      if (st === 'live' || st === 'active') liveProps++;
+      if (st === 'pending') pendingProps++;
+    });
+
+    const activeHosts = users.filter(u => (u.role || '').toLowerCase() === 'host').length;
+
+    const stats = {
+      totalVolume,
+      totalBookings: bookings.length,
+      totalProperties: properties.length,
+      pendingProperties: pendingProps,
+      liveProperties: liveProps || properties.length,
+      totalUsers: users.length,
+      activeHosts,
+      totalContacts: messages.length,
+      newsletterSubs: subscribers.length,
+      totalReviews: reviews.length,
+      tokenPercentage: 20
+    };
+
+    return res.json({
+      success: true,
+      stats,
+      properties,
+      users,
+      bookings,
+      applications,
+      messages,
+      subscribers,
+      cancellations,
+      coupons,
+      subadmins,
+      reviews
+    });
+  } catch (err) {
+    console.error('[Admin API] Full dashboard fetch error:', err.message);
+    res.json({
+      success: false,
+      message: 'Failed to fetch full admin dashboard data',
+      error: err.message
     });
   }
 });
