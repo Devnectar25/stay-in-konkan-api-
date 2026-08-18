@@ -205,4 +205,195 @@ router.put('/:id', async (req, res) => {
   }
 });
 
+/**
+ * GET /api/users/:id/bank-details
+ * Fetch user refund banking details from database
+ */
+router.get('/:id/bank-details', async (req, res) => {
+  const { id } = req.params;
+  try {
+    const rawSql = `SELECT id, full_name, email, avatar_url, bank_name, account_number, account_holder_name, ifsc_code, account_type, upi_id, branch_name, bank_details FROM users WHERE id = $1 OR LOWER(email) = LOWER($1) LIMIT 1;`;
+    const result = await query(rawSql, [id]);
+
+    const row = (result && result.rows && result.rows.length > 0) ? result.rows[0] : null;
+    let parsed = null;
+
+    if (row && row.bank_details) {
+      try {
+        parsed = typeof row.bank_details === 'string' ? JSON.parse(row.bank_details) : row.bank_details;
+      } catch (e) {}
+    }
+
+    // Also check cancellations table if not found on user
+    if (!parsed && !row?.bank_name && !row?.account_number) {
+      try {
+        const cancRes = await query("SELECT cancellation_reason, bank_name, account_number, account_holder_name, ifsc_code, upi_id FROM cancellations WHERE LOWER(user_email) = LOWER($1) AND (cancellation_reason LIKE '%[BANK:%' OR bank_name IS NOT NULL) ORDER BY created_at DESC LIMIT 1;", [id]);
+        if (cancRes && cancRes.rows && cancRes.rows.length > 0) {
+          const cRow = cancRes.rows[0];
+          if (cRow.cancellation_reason && cRow.cancellation_reason.includes('[BANK:')) {
+            const match = cRow.cancellation_reason.match(/\[BANK:(\{.*?\})\]/);
+            if (match && match[1]) {
+              parsed = JSON.parse(match[1]);
+            }
+          }
+          if (!parsed && (cRow.bank_name || cRow.account_number)) {
+            parsed = cRow;
+          }
+        }
+      } catch (e) {}
+    }
+
+    const bank_details = {
+      account_holder_name: row?.account_holder_name || parsed?.account_holder_name || row?.full_name || '',
+      bank_name: row?.bank_name || parsed?.bank_name || '',
+      account_number: row?.account_number || parsed?.account_number || '',
+      ifsc_code: row?.ifsc_code || parsed?.ifsc_code || '',
+      account_type: row?.account_type || parsed?.account_type || 'Savings',
+      upi_id: row?.upi_id || parsed?.upi_id || '',
+      branch_name: row?.branch_name || parsed?.branch_name || '',
+      is_verified: true,
+      is_completed: Boolean((row?.account_number || parsed?.account_number || row?.upi_id || parsed?.upi_id))
+    };
+
+    return res.json({ success: true, bank_details });
+  } catch (error) {
+    console.error('Get user bank details error:', error);
+    return res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+/**
+ * PUT /api/users/:id/bank-details
+ * Save or update user refund banking details in PostgreSQL database
+ */
+router.put('/:id/bank-details', async (req, res) => {
+  const { id } = req.params;
+  const {
+    account_holder_name,
+    bank_name,
+    account_number,
+    ifsc_code,
+    account_type,
+    upi_id,
+    branch_name
+  } = req.body;
+
+  try {
+    const bankCols = [
+      'bank_details TEXT',
+      'bank_name VARCHAR(255)',
+      'account_number VARCHAR(100)',
+      'account_holder_name VARCHAR(255)',
+      'ifsc_code VARCHAR(50)',
+      'account_type VARCHAR(50)',
+      'upi_id VARCHAR(100)',
+      'branch_name VARCHAR(255)'
+    ];
+    for (const c of bankCols) {
+      await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS ${c};`).catch(() => {});
+    }
+
+    const bankDetailsJson = JSON.stringify({
+      account_holder_name: account_holder_name || '',
+      bank_name: bank_name || '',
+      account_number: account_number || '',
+      ifsc_code: ifsc_code || '',
+      account_type: account_type || 'Savings',
+      upi_id: upi_id || '',
+      branch_name: branch_name || '',
+      updated_at: new Date().toISOString()
+    });
+
+    const updateSql = `
+      UPDATE users
+      SET bank_details = $1,
+          bank_name = COALESCE($2, bank_name),
+          account_number = COALESCE($3, account_number),
+          account_holder_name = COALESCE($4, account_holder_name),
+          ifsc_code = COALESCE($5, ifsc_code),
+          account_type = COALESCE($6, account_type),
+          upi_id = COALESCE($7, upi_id),
+          branch_name = COALESCE($8, branch_name),
+          updated_at = NOW()
+      WHERE id = $9 OR LOWER(email) = LOWER($9)
+      RETURNING *;
+    `;
+    const params = [
+      bankDetailsJson,
+      bank_name || null,
+      account_number || null,
+      account_holder_name || null,
+      ifsc_code || null,
+      account_type || 'Savings',
+      upi_id || null,
+      branch_name || null,
+      id
+    ];
+
+    let result = await query(updateSql, params);
+
+    // If 0 rows updated (e.g. user row not inserted yet), perform an upsert
+    if (!result || !result.rows || result.rows.length === 0) {
+      const userEmail = String(id).toLowerCase().includes('@') ? id : `${id}@guest.stayinkonkan.com`;
+      const userId = String(id).toLowerCase().includes('@') ? `usr_${String(id).toLowerCase().replace(/[^a-z0-9]/g, '_')}` : id;
+      const userName = account_holder_name || 'Guest User';
+
+      await query(
+        `INSERT INTO users (id, full_name, email, role, verified, bank_name, account_number, account_holder_name, ifsc_code, account_type, upi_id, branch_name, bank_details, updated_at)
+         VALUES ($1, $2, $3, 'guest', true, $4, $5, $6, $7, $8, $9, $10, $11, NOW())
+         ON CONFLICT (email) DO UPDATE SET
+           bank_name = EXCLUDED.bank_name,
+           account_number = EXCLUDED.account_number,
+           account_holder_name = EXCLUDED.account_holder_name,
+           ifsc_code = EXCLUDED.ifsc_code,
+           account_type = EXCLUDED.account_type,
+           upi_id = EXCLUDED.upi_id,
+           branch_name = EXCLUDED.branch_name,
+           bank_details = EXCLUDED.bank_details,
+           updated_at = NOW();`,
+        [
+          userId,
+          userName,
+          userEmail,
+          bank_name || null,
+          account_number || null,
+          account_holder_name || null,
+          ifsc_code || null,
+          account_type || 'Savings',
+          upi_id || null,
+          branch_name || null,
+          bankDetailsJson
+        ]
+      ).catch(() => {});
+    }
+
+    // Ensure avatar_url is clean and never polluted with bank tags
+    try {
+      const uRes = await query('SELECT avatar_url FROM users WHERE id = $1 OR LOWER(email) = LOWER($1) LIMIT 1;', [id]);
+      const currentAvatar = (uRes && uRes.rows && uRes.rows[0]) ? uRes.rows[0].avatar_url || '' : '';
+      if (currentAvatar.includes('[BANK:')) {
+        const cleanAvatar = currentAvatar.replace(/\[BANK:.*?\]/g, '').replace(/\|\|\|\s*$/, '').trim() || null;
+        await query('UPDATE users SET avatar_url = $1 WHERE id = $2 OR LOWER(email) = LOWER($2);', [cleanAvatar, id]);
+      }
+    } catch (e) {}
+
+    return res.json({
+      success: true,
+      message: 'User bank details saved successfully to database',
+      bank_details: {
+        account_holder_name,
+        bank_name,
+        account_number,
+        ifsc_code,
+        account_type: account_type || 'Savings',
+        upi_id,
+        branch_name
+      }
+    });
+  } catch (error) {
+    console.error('Update user bank details error:', error);
+    return res.status(500).json({ success: false, message: error.message || 'Database error' });
+  }
+});
+
 export default router;

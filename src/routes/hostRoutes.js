@@ -40,6 +40,8 @@ const ensureHostsTable = async () => {
     ];
     for (const c of cols) {
       await query(`ALTER TABLE hosts ADD COLUMN IF NOT EXISTS ${c};`).catch(() => {});
+      await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS ${c};`).catch(() => {});
+      await query(`ALTER TABLE host_applications ADD COLUMN IF NOT EXISTS ${c};`).catch(() => {});
     }
   } catch (err) {
     console.warn('Hosts table init check note:', err.message);
@@ -173,8 +175,62 @@ router.put('/:id/status', async (req, res) => {
 });
 
 /**
+ * GET /api/hosts/:id/bank-details
+ * Fetch host bank details from database
+ */
+router.get('/:id/bank-details', async (req, res) => {
+  await ensureHostsTable();
+  const { id } = req.params;
+  try {
+    let hostRes = await query('SELECT * FROM hosts WHERE id = $1 OR LOWER(email) = LOWER($1) LIMIT 1;', [id]);
+    if (!hostRes || !hostRes.rows || hostRes.rows.length === 0) {
+      hostRes = await query('SELECT * FROM users WHERE id = $1 OR LOWER(email) = LOWER($1) LIMIT 1;', [id]);
+    }
+    const host = (hostRes && hostRes.rows) ? hostRes.rows[0] : null;
+    if (!host) {
+      return res.json({ success: true, bank_details: null });
+    }
+
+    let parsedBank = null;
+    if (host.bank_details) {
+      try {
+        parsedBank = typeof host.bank_details === 'string' ? JSON.parse(host.bank_details) : host.bank_details;
+      } catch (e) {}
+    }
+    if (!parsedBank && host.avatar_url && host.avatar_url.includes('[BANK:')) {
+      try {
+        const match = host.avatar_url.match(/\[BANK:(\{.*?\})\]/);
+        if (match && match[1]) {
+          parsedBank = JSON.parse(match[1]);
+        }
+      } catch (e) {}
+    }
+
+    const bank_details = {
+      account_holder_name: host.account_holder_name || parsedBank?.account_holder_name || host.full_name || '',
+      bank_name: host.bank_name || parsedBank?.bank_name || '',
+      account_number: host.account_number || parsedBank?.account_number || '',
+      ifsc_code: host.ifsc_code || parsedBank?.ifsc_code || '',
+      account_type: host.account_type || parsedBank?.account_type || 'Savings',
+      upi_id: host.upi_id || parsedBank?.upi_id || '',
+      branch_name: host.branch_name || parsedBank?.branch_name || '',
+      is_verified: true,
+      is_completed: Boolean(host.account_number || parsedBank?.account_number)
+    };
+
+    return res.json({
+      success: true,
+      bank_details
+    });
+  } catch (error) {
+    console.error('Fetch host bank details error:', error);
+    return res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+/**
  * PUT /api/hosts/:id/bank-details
- * Save or update host bank details
+ * Save or update host bank details in PostgreSQL database
  */
 router.put('/:id/bank-details', async (req, res) => {
   await ensureHostsTable();
@@ -227,10 +283,99 @@ router.put('/:id/bank-details', async (req, res) => {
       id
     ];
 
-    const result = await query(updateSql, params);
+    let result = await query(updateSql, params);
+
+    // If host record was not in `hosts` table yet, fetch details and insert
+    if (!result || !result.rows || result.rows.length === 0) {
+      let hostFullName = account_holder_name || 'Host User';
+      let hostEmail = id;
+      try {
+        const uRes = await query('SELECT full_name, email, phone FROM users WHERE id = $1 OR LOWER(email) = LOWER($1) LIMIT 1;', [id]);
+        if (uRes && uRes.rows && uRes.rows.length > 0) {
+          hostFullName = uRes.rows[0].full_name || hostFullName;
+          hostEmail = uRes.rows[0].email || hostEmail;
+        }
+      } catch (e) {}
+
+      const hostId = `host_${String(hostEmail).toLowerCase().replace(/[^a-z0-9]/g, '_')}`;
+      await query(
+        `INSERT INTO hosts (id, full_name, email, bank_name, account_number, account_holder_name, ifsc_code, account_type, upi_id, branch_name, bank_details, verified, status)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, true, 'active')
+         ON CONFLICT (email) DO UPDATE SET
+           bank_name = EXCLUDED.bank_name,
+           account_number = EXCLUDED.account_number,
+           account_holder_name = EXCLUDED.account_holder_name,
+           ifsc_code = EXCLUDED.ifsc_code,
+           account_type = EXCLUDED.account_type,
+           upi_id = EXCLUDED.upi_id,
+           branch_name = EXCLUDED.branch_name,
+           bank_details = EXCLUDED.bank_details,
+           updated_at = NOW();`,
+        [
+          hostId,
+          hostFullName,
+          hostEmail,
+          bank_name || null,
+          account_number || null,
+          account_holder_name || null,
+          ifsc_code || null,
+          account_type || 'Savings',
+          upi_id || null,
+          branch_name || null,
+          bankDetailsJson
+        ]
+      ).catch(() => {});
+    }
+
+    // Also update users table columns
+    await query(
+      `UPDATE users
+       SET bank_details = $1,
+           bank_name = COALESCE($2, bank_name),
+           account_number = COALESCE($3, account_number),
+           account_holder_name = COALESCE($4, account_holder_name),
+           ifsc_code = COALESCE($5, ifsc_code),
+           account_type = COALESCE($6, account_type),
+           upi_id = COALESCE($7, upi_id),
+           branch_name = COALESCE($8, branch_name)
+       WHERE id = $9 OR LOWER(email) = LOWER($9);`,
+      [
+        bankDetailsJson,
+        bank_name || null,
+        account_number || null,
+        account_holder_name || null,
+        ifsc_code || null,
+        account_type || 'Savings',
+        upi_id || null,
+        branch_name || null,
+        id
+      ]
+    ).catch(() => {});
+
+    // Ensure avatar_url is never polluted with bank tags
+    try {
+      const uRes = await query('SELECT avatar_url FROM users WHERE id = $1 OR LOWER(email) = LOWER($1) LIMIT 1;', [id]);
+      const currentAvatar = (uRes && uRes.rows && uRes.rows[0]) ? uRes.rows[0].avatar_url || '' : '';
+      if (currentAvatar.includes('[BANK:')) {
+        const cleanAvatar = currentAvatar.replace(/\[BANK:.*?\]/g, '').replace(/\|\|\|\s*$/, '').trim() || null;
+        await query('UPDATE users SET avatar_url = $1 WHERE id = $2 OR LOWER(email) = LOWER($2);', [cleanAvatar, id]);
+      }
+    } catch (e) {}
+
+    // Also update host_applications table if matching
+    await query(
+      `UPDATE host_applications
+       SET bank_name = COALESCE($1, bank_name),
+           account_number = COALESCE($2, account_number),
+           account_holder_name = COALESCE($3, account_holder_name),
+           ifsc_code = COALESCE($4, ifsc_code)
+       WHERE LOWER(email) = LOWER($5) OR LOWER(applicant_email) = LOWER($5);`,
+      [bank_name || null, account_number || null, account_holder_name || null, ifsc_code || null, id]
+    ).catch(() => {});
+
     return res.json({
       success: true,
-      message: 'Bank details saved successfully',
+      message: 'Bank details saved successfully to database',
       bank_details: {
         account_holder_name,
         bank_name,

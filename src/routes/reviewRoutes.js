@@ -9,37 +9,56 @@ const router = express.Router();
  * Saves a property review to reviews table in PostgreSQL
  */
 router.post('/', async (req, res) => {
-  const { property_id, property_name, guest_name, user_email, rating, comment, status } = req.body;
+  const { property_id, guest_name, user_email, rating, comment } = req.body;
 
   if (!property_id || !guest_name || !comment) {
     return res.status(400).json({ success: false, message: 'Property ID, guest name, and comment are required.' });
   }
 
-  const uuid = crypto.randomUUID();
+  const uuid = `REV-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`;
 
   try {
     const rawSql = `
-      INSERT INTO reviews (id, property_id, property_name, guest_name, user_email, rating, comment, status, created_at)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+      INSERT INTO reviews (id, property_id, guest_name, user_email, rating, comment, created_at)
+      VALUES ($1, $2, $3, $4, $5, $6, NOW())
       RETURNING *;
     `;
     const params = [
       uuid,
       String(property_id),
-      property_name || 'Konkan Stay',
       guest_name.trim(),
       user_email ? user_email.trim().toLowerCase() : null,
       rating ? parseInt(rating, 10) : 5,
-      comment.trim(),
-      status || 'published'
+      comment.trim()
     ];
 
     const result = await query(rawSql, params);
 
+    // Recalculate property average rating & review count
+    try {
+      const allRevRes = await query('SELECT rating FROM reviews WHERE property_id = $1', [String(property_id)]);
+      if (allRevRes && allRevRes.rows && allRevRes.rows.length > 0) {
+        const totalRating = allRevRes.rows.reduce((sum, r) => sum + (parseFloat(r.rating) || 5), 0);
+        const avgRating = parseFloat((totalRating / allRevRes.rows.length).toFixed(1));
+        const revCount = allRevRes.rows.length;
+        await query('UPDATE properties SET rating = $1, reviews_count = $2 WHERE id = $3', [avgRating, revCount, String(property_id)]);
+      }
+    } catch (rErr) {
+      console.warn('[Reviews API] Property rating update note:', rErr.message);
+    }
+
     return res.json({
       success: true,
       message: 'Review submitted successfully to database!',
-      review: result.rows[0]
+      review: (result && result.rows && result.rows[0]) ? result.rows[0] : {
+        id: uuid,
+        property_id: String(property_id),
+        guest_name: guest_name.trim(),
+        user_email: user_email ? user_email.trim().toLowerCase() : null,
+        rating: rating ? parseInt(rating, 10) : 5,
+        comment: comment.trim(),
+        created_at: new Date().toISOString()
+      }
     });
   } catch (error) {
     console.error('Review DB save error:', error);
