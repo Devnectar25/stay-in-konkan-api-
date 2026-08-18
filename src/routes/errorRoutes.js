@@ -4,6 +4,9 @@ import { query } from '../db.js';
 
 const router = express.Router();
 
+const SUPABASE_URL = process.env.SUPABASE_URL || 'https://bqsczpvvqvcgztrlpwwj.supabase.co';
+const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJxc2N6cHZ2cXZjZ3p0cmxwd3dqIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4NjY4Mzg1NSwiZXhwIjoyMTAyMjU5ODU1fQ.TNG7GxbS2gZa5WsVZmS4u3UVowDsjLc5nkeJfd-e_to';
+
 /**
  * Ensures application_errors table exists in database
  */
@@ -114,20 +117,64 @@ router.post('/log', async (req, res) => {
       return res.status(400).json({ success: false, message: 'Error message is required.' });
     }
 
-    const uuid = crypto.randomUUID();
-    const errorId = generateErrorId();
     const cleanMessage = sanitizeSensitiveData(message);
     const cleanStack = sanitizeSensitiveData(stack_trace || '');
     const finalStatusCode = parseInt(status_code || 500, 10);
     const computedSeverity = severity || calculateSeverity(finalStatusCode, error_type, cleanMessage);
     const finalEnvironment = environment || process.env.NODE_ENV || 'production';
+    const cleanType = (error_type || 'UnhandledError').slice(0, 100);
+    const cleanEndpoint = (endpoint || '/').slice(0, 500);
+
+    // 1. Check for existing identical error signature to prevent duplicates and increment occurrences
+    let existingError = null;
+    try {
+      const existRes = await query(
+        `SELECT id, error_id, message, error_type, endpoint, severity, status, occurrences FROM application_errors WHERE error_type = $1 AND endpoint = $2 AND message = $3 LIMIT 1;`,
+        [cleanType, cleanEndpoint, cleanMessage.slice(0, 2000)]
+      );
+      if (existRes && existRes.rows && existRes.rows[0]) {
+        existingError = existRes.rows[0];
+      }
+    } catch (e) { }
+
+    if (existingError) {
+      const newOccurrences = (parseInt(existingError.occurrences, 10) || 1) + 1;
+      try {
+        await query(
+          `UPDATE application_errors 
+           SET 
+             occurrences = COALESCE(occurrences, 1) + 1,
+             last_seen = NOW(),
+             created_at = NOW(), 
+             stack_trace = COALESCE($1, stack_trace), 
+             status = CASE WHEN status = 'Resolved' THEN 'New' ELSE status END 
+           WHERE id = $2 OR error_id = $2;`,
+          [cleanStack, existingError.id]
+        );
+      } catch (e) { }
+
+      return res.status(200).json({
+        success: true,
+        message: 'Exception occurrence recorded.',
+        error_id: existingError.error_id,
+        data: { 
+          ...existingError, 
+          occurrences: newOccurrences,
+          last_seen: new Date().toISOString(),
+          created_at: new Date().toISOString() 
+        }
+      });
+    }
+
+    const uuid = crypto.randomUUID();
+    const errorId = generateErrorId();
 
     const insertSql = `
       INSERT INTO application_errors (
         id, error_id, message, error_type, stack_trace, endpoint, http_method,
         status_code, user_id, user_email, browser, device, environment,
-        severity, status, created_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 'New', NOW())
+        severity, status, occurrences, last_seen, created_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, 'New', 1, NOW(), NOW())
       RETURNING *;
     `;
 
@@ -135,9 +182,9 @@ router.post('/log', async (req, res) => {
       uuid,
       errorId,
       cleanMessage.slice(0, 2000),
-      (error_type || 'UnhandledError').slice(0, 100),
+      cleanType,
       cleanStack,
-      (endpoint || '/').slice(0, 500),
+      cleanEndpoint,
       (http_method || 'GET').toUpperCase().slice(0, 20),
       finalStatusCode,
       user_id || null,
@@ -161,8 +208,6 @@ router.post('/log', async (req, res) => {
     // Direct Supabase REST fallback if pg insert failed
     if (!insertedLog) {
       try {
-        const SUPABASE_URL = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
-        const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY;
         if (SUPABASE_URL && SUPABASE_KEY) {
           const body = {
             id: uuid,
@@ -310,8 +355,6 @@ router.get('/', async (req, res) => {
     // Direct Supabase REST fallback if pg returned nothing
     if (rows.length === 0) {
       try {
-        const SUPABASE_URL = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
-        const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY;
         if (SUPABASE_URL && SUPABASE_KEY) {
           let restUrl = `${SUPABASE_URL}/rest/v1/application_errors?select=*&order=created_at.desc&limit=${parseInt(limit, 10)}&offset=${offset}`;
           if (status && status !== 'all') restUrl += `&status=eq.${encodeURIComponent(status)}`;
@@ -478,6 +521,53 @@ router.delete('/:id', async (req, res) => {
     return res.json({ success: true, message: `Error log ${id} deleted successfully.` });
   } catch (err) {
     return res.status(500).json({ success: false, message: 'Failed to delete error log.' });
+  }
+});
+
+/**
+ * POST /api/errors/deduplicate
+ * Clean all duplicate exception records from database
+ */
+router.post('/deduplicate', async (req, res) => {
+  try {
+    await ensureErrorTableExists();
+    let rows = [];
+    try {
+      const dbRes = await query('SELECT * FROM application_errors ORDER BY created_at DESC');
+      if (dbRes && dbRes.rows) rows = dbRes.rows;
+    } catch (e) { }
+
+    const seenFingerprints = new Map();
+    const duplicateIds = [];
+
+    for (const row of rows) {
+      const cleanType = (row.error_type || 'UnhandledError').toLowerCase().trim();
+      const cleanEndpoint = (row.endpoint || '/').toLowerCase().trim();
+      const cleanMsg = (row.message || '').replace(/\s+/g, ' ').toLowerCase().trim().slice(0, 150);
+      const fingerprint = `${cleanType}::${cleanEndpoint}::${cleanMsg}`;
+
+      if (!seenFingerprints.has(fingerprint)) {
+        seenFingerprints.set(fingerprint, row);
+      } else {
+        duplicateIds.push(row.id || row.error_id);
+      }
+    }
+
+    for (const id of duplicateIds) {
+      if (!id) continue;
+      try {
+        await query('DELETE FROM application_errors WHERE id = $1 OR error_id = $1', [id]);
+      } catch (e) { }
+    }
+
+    return res.json({
+      success: true,
+      message: `Database deduplication completed. Removed ${duplicateIds.length} duplicate records.`,
+      deleted_count: duplicateIds.length,
+      remaining_count: seenFingerprints.size
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: 'Deduplication failed.' });
   }
 });
 

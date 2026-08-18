@@ -20,13 +20,14 @@ router.post('/', async (req, res) => {
   try {
     // 1. Check if already exists in wishlist
     const existing = await query(
-      'SELECT * FROM wishlists WHERE LOWER(user_email) = LOWER($1) AND property_id = $2',
+      'SELECT id, user_email, property_id FROM wishlists WHERE LOWER(user_email) = LOWER($1) AND property_id = $2',
       [email, String(property_id)]
     );
 
-    if (existing.rows.length > 0) {
+    if (existing && existing.rows && existing.rows.length > 0) {
       // Remove from wishlist (toggle off)
-      await query('DELETE FROM wishlists WHERE id = $1', [existing.rows[0].id]);
+      const targetWishlistId = existing.rows[0].id;
+      await query('DELETE FROM wishlists WHERE id = $1', [targetWishlistId]);
       return res.json({
         success: true,
         action: 'removed',
@@ -35,7 +36,7 @@ router.post('/', async (req, res) => {
     }
 
     // 2. Insert into PostgreSQL (toggle on)
-    const uuid = crypto.randomUUID();
+    const uuid = `WISH-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`;
     const rawSql = `
       INSERT INTO wishlists (id, user_email, user_name, property_id, property_title, property_image, property_location, property_price, created_at)
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
@@ -48,17 +49,29 @@ router.post('/', async (req, res) => {
       String(property_id),
       property_title || 'Konkan Stay',
       property_image || null,
-      property_location || 'Konkan',
+      property_location || 'Konkan, Maharashtra',
       property_price ? String(property_price) : '0'
     ];
 
     const result = await query(rawSql, params);
 
+    const insertedWishlist = (result && result.rows && result.rows[0]) ? result.rows[0] : {
+      id: uuid,
+      user_email: email,
+      user_name: user_name || email.split('@')[0],
+      property_id: String(property_id),
+      property_title: property_title || 'Konkan Stay',
+      property_image: property_image || null,
+      property_location: property_location || 'Konkan, Maharashtra',
+      property_price: property_price ? String(property_price) : '0',
+      created_at: new Date().toISOString()
+    };
+
     return res.json({
       success: true,
       action: 'added',
       message: 'Property added to wishlist in database!',
-      wishlist: result.rows[0]
+      wishlist: insertedWishlist
     });
   } catch (error) {
     console.error('Wishlist DB save error:', error);

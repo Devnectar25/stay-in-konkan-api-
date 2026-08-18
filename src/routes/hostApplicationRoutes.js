@@ -113,7 +113,7 @@ router.post('/', async (req, res) => {
 router.get('/', async (req, res) => {
   try {
     await ensureHostApplicationsTable();
-    const result = await query('SELECT * FROM host_applications ORDER BY created_at DESC');
+    const result = await query("SELECT * FROM host_applications WHERE LOWER(status) = 'pending' OR status IS NULL ORDER BY created_at DESC");
     return res.json({ success: true, count: result.rowCount, applications: result.rows });
   } catch (error) {
     console.error('Fetch host applications error:', error);
@@ -140,6 +140,86 @@ router.put('/:id/status', async (req, res) => {
   try {
     await ensureHostApplicationsTable();
 
+    let app = null;
+    try {
+      const appRes = await query(
+        'SELECT * FROM host_applications WHERE id = $1 OR application_id = $1 OR ($2 != \'\' AND LOWER(applicant_email) = LOWER($2)) LIMIT 1',
+        [rawId, targetEmail]
+      );
+      if (appRes && appRes.rows && appRes.rows.length > 0) {
+        app = appRes.rows[0];
+      }
+    } catch (e) {}
+
+    const hostName = app?.applicant_name || app?.name || req.body.name || req.body.applicant_name || 'Verified Host';
+    const hostEmail = (app?.applicant_email || app?.email || targetEmail || req.body.email || rawId).toLowerCase().trim();
+    const hostPhone = app?.phone || req.body.phone || '';
+    const hostLocation = app?.location || req.body.location || 'Konkan, Maharashtra';
+    const hostId = hostEmail;
+
+    if (status === 'approved' && hostEmail) {
+      // 1. Insert/Upsert into hosts table with verified status
+      try {
+        await query(`
+          INSERT INTO hosts (
+            id, full_name, email, phone, location, total_properties, verified, status, created_at, updated_at
+          )
+          VALUES ($1, $2, $3, $4, $5, 1, true, 'verified', NOW(), NOW())
+          ON CONFLICT (email) DO UPDATE SET
+            id = EXCLUDED.id,
+            full_name = COALESCE(EXCLUDED.full_name, hosts.full_name),
+            phone = COALESCE(EXCLUDED.phone, hosts.phone),
+            location = COALESCE(EXCLUDED.location, hosts.location),
+            verified = true,
+            status = 'verified',
+            updated_at = NOW();
+        `, [hostId, hostName, hostEmail, hostPhone, hostLocation]);
+      } catch (err) {
+        console.error('Insert approved host error:', err.message);
+      }
+
+      // 2. Insert/Upsert into users table with role = 'host'
+      try {
+        await query(`
+          INSERT INTO users (id, full_name, email, role, verified, phone, updated_at)
+          VALUES ($1, $2, $3, $4, $5, $6, NOW())
+          ON CONFLICT (email) DO UPDATE SET
+            role = 'host',
+            verified = true,
+            full_name = COALESCE(EXCLUDED.full_name, users.full_name),
+            phone = COALESCE(EXCLUDED.phone, users.phone),
+            updated_at = NOW();
+        `, [hostId, hostName, hostEmail, 'host', true, hostPhone]);
+      } catch (err) {
+        console.error('Promote user to host error:', err.message);
+      }
+
+      // 3. Activate host properties
+      try {
+        await query(
+          "UPDATE properties SET status = 'live' WHERE LOWER(host_email) = LOWER($1) OR id = $2",
+          [hostEmail, rawId]
+        );
+      } catch (e) {}
+
+      // 4. Remove approved host application from host_applications table
+      try {
+        await query(
+          'DELETE FROM host_applications WHERE id = $1 OR application_id = $1 OR ($2 != \'\' AND LOWER(applicant_email) = LOWER($2))',
+          [rawId, hostEmail]
+        );
+      } catch (err) {
+        console.error('Delete approved host application error:', err.message);
+      }
+
+      return res.json({
+        success: true,
+        message: `Host ${hostName} approved and added to hosts table in database`,
+        host: { id: hostId, full_name: hostName, email: hostEmail, phone: hostPhone, location: hostLocation, status: 'verified' }
+      });
+    }
+
+    // For other statuses (e.g. rejected/pending)
     const result = await query(
       `UPDATE host_applications 
        SET status = $1 
@@ -150,40 +230,10 @@ router.put('/:id/status', async (req, res) => {
       [status || 'pending', rawId, targetEmail]
     );
 
-    // Sync with properties table
-    try {
-      const propStatus = (status === 'approved') ? 'live' : status;
-      if (targetEmail || rawId) {
-        await query(
-          'UPDATE properties SET status = $1 WHERE LOWER(host_email) = LOWER($2) OR id = $3',
-          [propStatus, targetEmail || rawId, rawId]
-        );
-      }
-    } catch (e) { }
-
-    // Sync with users table role promotion/demotion
-    if (targetEmail || rawId) {
-      if (status === 'approved') {
-        try {
-          await query(
-            'UPDATE users SET role = $1, verified = true, updated_at = NOW() WHERE LOWER(email) = LOWER($2) OR id::text = $3',
-            ['host', targetEmail || rawId, rawId]
-          );
-        } catch (e) { }
-      } else if (status === 'demoted' || status === 'rejected') {
-        try {
-          await query(
-            'UPDATE users SET role = $1, verified = false, updated_at = NOW() WHERE LOWER(email) = LOWER($2) OR id::text = $3',
-            ['guest', targetEmail || rawId, rawId]
-          );
-        } catch (e) { }
-      }
-    }
-
     return res.json({
       success: true,
       message: `Application status updated to ${status}`,
-      application: result.rows[0] || null
+      application: result?.rows?.[0] || null
     });
   } catch (error) {
     console.error('Update host application status error:', error);

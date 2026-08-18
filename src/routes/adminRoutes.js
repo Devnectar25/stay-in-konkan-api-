@@ -4,6 +4,42 @@ import { query } from '../db.js';
 const router = express.Router();
 
 /**
+ * Helper to auto-complete past check-outs if not cancelled
+ */
+const normalizeBookingStatus = (b) => {
+  if (!b) return b;
+  const status = String(b.status || 'confirmed').toLowerCase().trim();
+  const isCancelledOrRejected = [
+    'cancelled',
+    'cancelled_by_guest',
+    'cancelled_by_host',
+    'cancellation_pending',
+    'cancellation_requested',
+    'rejected',
+    'declined',
+    'refunded'
+  ].includes(status);
+
+  if (isCancelledOrRejected) {
+    return b;
+  }
+
+  const checkOutStr = b.check_out || b.checkOut;
+  if (checkOutStr) {
+    const todayStr = new Date().toISOString().split('T')[0];
+    const cleanOut = String(checkOutStr).trim().split('T')[0];
+    if (cleanOut <= todayStr) {
+      return {
+        ...b,
+        status: 'completed'
+      };
+    }
+  }
+
+  return b;
+};
+
+/**
  * Admin Login Endpoint
  * POST /api/admin/login
  */
@@ -139,8 +175,16 @@ router.get('/stats', async (req, res) => {
       liveCount = totalPropsCount;
     }
 
+    let dbTokenPct = 25;
+    try {
+      const confRes = await query("SELECT token_percentage FROM platform_config WHERE id = 'default' OR id = 'global' LIMIT 1");
+      if (confRes?.rows?.length && confRes.rows[0].token_percentage) {
+        dbTokenPct = Number(confRes.rows[0].token_percentage);
+      }
+    } catch (e) {}
+
     const hostCount = parseInt(usersRes.rows.find(r => r.role === 'host')?.total || 0, 10);
-    const tokenEarnings = Math.round((totalVolumeAmount * 20) / 100);
+    const tokenEarnings = Math.round((totalVolumeAmount * dbTokenPct) / 100);
 
     const stats = {
       totalVolume: totalVolumeAmount,
@@ -153,7 +197,7 @@ router.get('/stats', async (req, res) => {
       activeHosts: hostCount,
       totalContacts: contactCount,
       newsletterSubs: subCount,
-      tokenPercentage: 20
+      tokenPercentage: dbTokenPct
     };
 
     res.json({ success: true, stats });
@@ -164,17 +208,19 @@ router.get('/stats', async (req, res) => {
       const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
       if (supabaseUrl && supabaseKey) {
         const headers = { 'apikey': supabaseKey, 'Authorization': `Bearer ${supabaseKey}` };
-        const [bookingsRes, propsRes, usersRes, msgsRes, subsRes] = await Promise.all([
+        const [bookingsRes, propsRes, usersRes, msgsRes, subsRes, configRes] = await Promise.all([
           fetch(`${supabaseUrl}/rest/v1/bookings?select=total_amount,paid_amount,total_price,status`, { headers }).then(r => r.json()).catch(() => []),
           fetch(`${supabaseUrl}/rest/v1/properties?select=id,status`, { headers }).then(r => r.json()).catch(() => []),
           fetch(`${supabaseUrl}/rest/v1/users?select=id,role`, { headers }).then(r => r.json()).catch(() => []),
           fetch(`${supabaseUrl}/rest/v1/contact_messages?select=id`, { headers }).then(r => r.json()).catch(() => []),
-          fetch(`${supabaseUrl}/rest/v1/newsletter_subscribers?select=id`, { headers }).then(r => r.json()).catch(() => [])
+          fetch(`${supabaseUrl}/rest/v1/newsletter_subscribers?select=id`, { headers }).then(r => r.json()).catch(() => []),
+          fetch(`${supabaseUrl}/rest/v1/platform_config?select=token_percentage`, { headers }).then(r => r.json()).catch(() => [])
         ]);
 
         const validBookings = Array.isArray(bookingsRes) ? bookingsRes : [];
         const validProps = Array.isArray(propsRes) ? propsRes : [];
         const validUsers = Array.isArray(usersRes) ? usersRes : [];
+        const dbTokenPct = Array.isArray(configRes) && configRes[0]?.token_percentage ? Number(configRes[0].token_percentage) : 25;
 
         const totalBookings = validBookings.length;
         let totalVolume = 0;
@@ -198,6 +244,7 @@ router.get('/stats', async (req, res) => {
           success: true,
           stats: {
             totalVolume,
+            tokenEarnings: Math.round((totalVolume * dbTokenPct) / 100),
             totalBookings,
             totalProperties: validProps.length,
             pendingProperties: pendingCount,
@@ -206,7 +253,7 @@ router.get('/stats', async (req, res) => {
             activeHosts: hostCount,
             totalContacts: Array.isArray(msgsRes) ? msgsRes.length : 0,
             newsletterSubs: Array.isArray(subsRes) ? subsRes.length : 0,
-            tokenPercentage: 20
+            tokenPercentage: dbTokenPct
           }
         });
       }
@@ -218,6 +265,7 @@ router.get('/stats', async (req, res) => {
       success: true,
       stats: {
         totalVolume: 416143,
+        tokenEarnings: Math.round((416143 * 25) / 100),
         totalBookings: 51,
         totalProperties: 12,
         pendingProperties: 0,
@@ -226,11 +274,44 @@ router.get('/stats', async (req, res) => {
         activeHosts: 2,
         totalContacts: 22,
         newsletterSubs: 5,
-        tokenPercentage: 20
+        tokenPercentage: 25
       }
     });
   }
 });
+
+const extractBankDetails = (item) => {
+  if (!item) return item;
+  let bankName = item.bank_name || null;
+  let accountHolder = item.account_holder_name || null;
+  let accountNumber = item.account_number || null;
+  let ifsc = item.ifsc_code || null;
+  let upi = item.upi_id || null;
+  let cleanReason = item.cancellation_reason || '';
+
+  const bankTagMatch = cleanReason.match(/\[BANK:(\{.*?\})\]/);
+  if (bankTagMatch && bankTagMatch[1]) {
+    try {
+      const parsed = JSON.parse(bankTagMatch[1]);
+      if (!bankName && parsed.bank_name) bankName = parsed.bank_name;
+      if (!accountHolder && parsed.account_holder_name) accountHolder = parsed.account_holder_name;
+      if (!accountNumber && parsed.account_number) accountNumber = parsed.account_number;
+      if (!ifsc && parsed.ifsc_code) ifsc = parsed.ifsc_code;
+      if (!upi && parsed.upi_id) upi = parsed.upi_id;
+    } catch (e) {}
+    cleanReason = cleanReason.replace(/\[BANK:(\{.*?\})\]/, '').trim();
+  }
+
+  return {
+    ...item,
+    bank_name: bankName,
+    account_holder_name: accountHolder,
+    account_number: accountNumber,
+    ifsc_code: ifsc,
+    upi_id: upi,
+    cancellation_reason: cleanReason
+  };
+};
 
 /**
  * Unified Full Dashboard Endpoint
@@ -246,33 +327,72 @@ router.get('/full-dashboard', async (req, res) => {
       appsRes,
       msgsRes,
       subsRes,
-      cancelsRes,
+      cancelsRes1,
+      cancelsRes2,
       couponsRes,
       subsAdminsRes,
-      reviewsRes
+      reviewsRes,
+      configRes
     ] = await Promise.all([
       query('SELECT p.*, u.full_name as owner_name, u.email as owner_email FROM properties p LEFT JOIN users u ON p.host_email = u.email ORDER BY p.created_at DESC').catch(() => ({ rows: [] })),
       query('SELECT id, full_name, email, role, verified, created_at FROM users ORDER BY created_at DESC').catch(() => ({ rows: [] })),
       query('SELECT * FROM bookings ORDER BY created_at DESC').catch(() => ({ rows: [] })),
-      query('SELECT * FROM host_applications ORDER BY created_at DESC').catch(() => ({ rows: [] })),
+      query("SELECT * FROM host_applications WHERE LOWER(status) = 'pending' OR status IS NULL ORDER BY created_at DESC").catch(() => ({ rows: [] })),
       query('SELECT * FROM contact_messages ORDER BY created_at DESC').catch(() => ({ rows: [] })),
       query('SELECT * FROM newsletter_subscribers ORDER BY created_at DESC').catch(() => ({ rows: [] })),
       query('SELECT * FROM cancellations ORDER BY created_at DESC').catch(() => ({ rows: [] })),
+      query('SELECT * FROM cancel_bookings ORDER BY created_at DESC').catch(() => ({ rows: [] })),
       query('SELECT * FROM coupons ORDER BY created_at DESC').catch(() => ({ rows: [] })),
       query('SELECT * FROM subadmins ORDER BY created_at DESC').catch(() => ({ rows: [] })),
-      query('SELECT * FROM reviews ORDER BY created_at DESC').catch(() => ({ rows: [] }))
+      query('SELECT * FROM reviews ORDER BY created_at DESC').catch(() => ({ rows: [] })),
+      query("SELECT * FROM platform_config WHERE id = 'default' OR id = 'global' LIMIT 1").catch(() => ({ rows: [] }))
     ]);
 
     const properties = propsRes.rows || [];
     const users = usersRes.rows || [];
-    const bookings = bookingsRes.rows || [];
+    const bookings = (bookingsRes.rows || []).map(normalizeBookingStatus);
     const applications = appsRes.rows || [];
     const messages = msgsRes.rows || [];
     const subscribers = subsRes.rows || [];
-    const cancellations = cancelsRes.rows || [];
+    
+    // Unify cancellations from both tables
+    const cancMap = new Map();
+    (cancelsRes1.rows || []).forEach(item => {
+      const key = String(item.id || item.booking_id || '').toLowerCase().trim();
+      if (key) cancMap.set(key, extractBankDetails(item));
+    });
+    (cancelsRes2.rows || []).forEach(item => {
+      const key = String(item.id || item.booking_id || '').toLowerCase().trim();
+      if (key) {
+        const existing = cancMap.get(key);
+        const parsed = extractBankDetails(item);
+        if (existing) {
+          cancMap.set(key, {
+            ...existing,
+            ...parsed,
+            bank_name: parsed.bank_name || existing.bank_name || null,
+            account_holder_name: parsed.account_holder_name || existing.account_holder_name || null,
+            account_number: parsed.account_number || existing.account_number || null,
+            ifsc_code: parsed.ifsc_code || existing.ifsc_code || null,
+            upi_id: parsed.upi_id || existing.upi_id || null
+          });
+        } else {
+          cancMap.set(key, parsed);
+        }
+      }
+    });
+    const cancellations = Array.from(cancMap.values());
+
     const coupons = couponsRes.rows || [];
-    const subadmins = subsAdminsRes.rows || [];
+    const subadmins = (subsAdminsRes.rows || []).filter(s => {
+      const email = (s.email || '').toLowerCase().trim();
+      const name = (s.full_name || s.name || '').toLowerCase().trim();
+      return email !== 'admin@stayinkonkan.com' && !name.includes('platform admin') && (s.role || '').toLowerCase() !== 'admin';
+    });
     const reviews = reviewsRes.rows || [];
+
+    const dbConfigRow = configRes?.rows?.[0] || {};
+    const dbTokenPct = Number(dbConfigRow.token_percentage) || 25;
 
     const totalVolume = bookings.reduce((sum, b) => sum + parseFloat(b.total_amount || b.paid_amount || b.total_price || 0), 0);
     let liveProps = 0;
@@ -287,6 +407,7 @@ router.get('/full-dashboard', async (req, res) => {
 
     const stats = {
       totalVolume,
+      tokenEarnings: Math.round((totalVolume * dbTokenPct) / 100),
       totalBookings: bookings.length,
       totalProperties: properties.length,
       pendingProperties: pendingProps,
@@ -296,7 +417,7 @@ router.get('/full-dashboard', async (req, res) => {
       totalContacts: messages.length,
       newsletterSubs: subscribers.length,
       totalReviews: reviews.length,
-      tokenPercentage: 20
+      tokenPercentage: dbTokenPct
     };
 
     return res.json({
@@ -447,8 +568,13 @@ router.delete('/properties/:id', async (req, res) => {
  */
 router.get('/users', async (req, res) => {
   try {
-    const dbRes = await query('SELECT id, full_name, email, role, phone, verified, created_at FROM users ORDER BY created_at DESC');
-    res.json({ success: true, count: dbRes.rows.length, users: dbRes.rows });
+    const dbRes = await query("SELECT id, full_name, email, role, phone, verified, created_at FROM users WHERE LOWER(email) != 'admin@stayinkonkan.com' AND LOWER(role) != 'admin' ORDER BY created_at DESC");
+    const cleanUsers = (dbRes.rows || []).filter(u => {
+      const email = (u.email || '').toLowerCase().trim();
+      const name = (u.full_name || u.name || '').toLowerCase().trim();
+      return email !== 'admin@stayinkonkan.com' && !name.includes('platform admin') && (u.role || '').toLowerCase() !== 'admin';
+    });
+    res.json({ success: true, count: cleanUsers.length, users: cleanUsers });
   } catch (err) {
     console.warn('[Admin API] Users DB query note:', err.message);
     try {
@@ -460,7 +586,12 @@ router.get('/users', async (req, res) => {
         });
         const liveUsers = await resp.json();
         if (Array.isArray(liveUsers) && liveUsers.length > 0) {
-          return res.json({ success: true, count: liveUsers.length, users: liveUsers });
+          const cleanUsers = liveUsers.filter(u => {
+            const email = (u.email || '').toLowerCase().trim();
+            const name = (u.full_name || u.name || '').toLowerCase().trim();
+            return email !== 'admin@stayinkonkan.com' && !name.includes('platform admin') && (u.role || '').toLowerCase() !== 'admin';
+          });
+          return res.json({ success: true, count: cleanUsers.length, users: cleanUsers });
         }
       }
     } catch (apiErr) {
@@ -586,11 +717,51 @@ router.delete('/users/:id', async (req, res) => {
 });
 
 /**
+ * Auto-ensure platform_config table exists in database
+ */
+const ensurePlatformConfigTable = async () => {
+  try {
+    await query(`
+      CREATE TABLE IF NOT EXISTS platform_config (
+        id VARCHAR(100) PRIMARY KEY DEFAULT 'global',
+        token_percentage INT DEFAULT 20,
+        platform_name VARCHAR(255) DEFAULT 'Stay in Konkan',
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+      );
+    `);
+    await query(`
+      INSERT INTO platform_config (id, token_percentage, platform_name, updated_at)
+      VALUES ('global', 20, 'Stay in Konkan', NOW())
+      ON CONFLICT (id) DO NOTHING;
+    `);
+  } catch (e) {
+    console.warn('[Admin API] platform_config table ensure note:', e.message);
+  }
+};
+
+/**
  * Get Platform Configuration
  * GET /api/admin/config
  */
 router.get('/config', async (req, res) => {
-  res.json({ success: true, config: { tokenPercentage: 20 } });
+  try {
+    const dbRes = await query("SELECT * FROM platform_config LIMIT 1");
+    if (dbRes && dbRes.rows && dbRes.rows.length > 0) {
+      const row = dbRes.rows[0];
+      return res.json({
+        success: true,
+        config: {
+          tokenPercentage: Number(row.token_percentage) || 20,
+          platformName: row.platform_name || 'Stay in Konkan',
+          updatedAt: row.updated_at
+        }
+      });
+    }
+    return res.json({ success: true, config: { tokenPercentage: 20 } });
+  } catch (err) {
+    console.warn('[Admin API] Config get error:', err.message);
+    res.json({ success: true, config: { tokenPercentage: 20 } });
+  }
 });
 
 /**
@@ -598,12 +769,56 @@ router.get('/config', async (req, res) => {
  * PUT /api/admin/config
  */
 router.put('/config', async (req, res) => {
-  const { tokenPercentage } = req.body;
-  if (tokenPercentage === undefined || tokenPercentage < 10 || tokenPercentage > 30) {
-    return res.status(400).json({ success: false, message: 'Token percentage must be between 10% and 30%.' });
+  const { tokenPercentage, token_percentage, platformName, platform_name, contactEmail, contact_email, contactPhone, contact_phone } = req.body;
+  const pct = Number(tokenPercentage !== undefined ? tokenPercentage : token_percentage);
+
+  if (isNaN(pct) || pct < 1 || pct > 100) {
+    return res.status(400).json({ success: false, message: 'Token percentage must be a valid number between 1% and 100%.' });
   }
 
-  res.json({ success: true, message: `Token percentage updated to ${tokenPercentage}%.` });
+  const pName = platformName || platform_name || 'Stay in Konkan';
+  const cEmail = contactEmail || contact_email || 'support@stayinkonkan.com';
+  const cPhone = contactPhone || contact_phone || '+91 98221 14455';
+
+  try {
+    await ensurePlatformConfigTable();
+    const updateSql = `
+      UPDATE platform_config
+      SET token_percentage = $1,
+          platform_name = COALESCE($2, platform_name),
+          updated_at = NOW()
+      WHERE id = 'default' OR id = 'global'
+      RETURNING *;
+    `;
+    let dbRes = await query(updateSql, [pct, pName]);
+    if (!dbRes?.rows?.length) {
+      dbRes = await query(`
+        INSERT INTO platform_config (id, token_percentage, platform_name, updated_at)
+        VALUES ('default', $1, $2, NOW())
+        ON CONFLICT (id) DO UPDATE SET
+          token_percentage = EXCLUDED.token_percentage,
+          platform_name = EXCLUDED.platform_name,
+          updated_at = NOW()
+        RETURNING *;
+      `, [pct, pName]);
+    }
+    const saved = dbRes?.rows?.[0];
+
+    return res.json({
+      success: true,
+      message: `Platform configuration updated successfully in database.`,
+      config: {
+        tokenPercentage: Number(saved?.token_percentage || pct),
+        platformName: saved?.platform_name || pName,
+        contactEmail: cEmail,
+        contactPhone: cPhone,
+        updatedAt: saved?.updated_at || new Date().toISOString()
+      }
+    });
+  } catch (err) {
+    console.error('[Admin API] Config update error:', err.message);
+    return res.status(500).json({ success: false, message: err.message || 'Failed to update configuration in database' });
+  }
 });
 
 /**
@@ -647,11 +862,16 @@ ensureSubadminsTable();
 router.get('/subadmins', async (req, res) => {
   try {
     await ensureSubadminsTable();
-    let dbRes = await query("SELECT id, full_name, email, phone, role, permissions, created_at FROM subadmins ORDER BY created_at DESC");
+    let dbRes = await query("SELECT id, full_name, email, phone, role, permissions, created_at FROM subadmins WHERE LOWER(email) != 'admin@stayinkonkan.com' AND LOWER(role) = 'subadmin' ORDER BY created_at DESC");
     if (!dbRes || !dbRes.rows || dbRes.rows.length === 0) {
-      dbRes = await query("SELECT id, full_name, email, phone, role, 'all' as permissions, created_at FROM users WHERE role = 'subadmin' OR role = 'admin' ORDER BY created_at DESC");
+      dbRes = await query("SELECT id, full_name, email, phone, role, 'Full Access (All Modules)' as permissions, created_at FROM users WHERE (LOWER(role) = 'subadmin' OR LOWER(role) LIKE 'subadmin%') AND LOWER(email) != 'admin@stayinkonkan.com' ORDER BY created_at DESC");
     }
-    res.json({ success: true, subadmins: dbRes ? dbRes.rows : [] });
+    const cleanList = (dbRes?.rows || []).filter(s => {
+      const email = (s.email || '').toLowerCase().trim();
+      const name = (s.full_name || s.name || '').toLowerCase().trim();
+      return email !== 'admin@stayinkonkan.com' && !name.includes('platform admin') && (s.role || '').toLowerCase() !== 'admin';
+    });
+    res.json({ success: true, subadmins: cleanList });
   } catch (err) {
     res.json({ success: true, subadmins: [] });
   }

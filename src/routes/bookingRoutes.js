@@ -2,6 +2,42 @@ import express from 'express';
 import crypto from 'crypto';
 import { query } from '../db.js';
 
+/**
+ * Helper to auto-complete past check-outs if not cancelled
+ */
+export const normalizeBookingStatus = (b) => {
+  if (!b) return b;
+  const status = String(b.status || 'confirmed').toLowerCase().trim();
+  const isCancelledOrRejected = [
+    'cancelled',
+    'cancelled_by_guest',
+    'cancelled_by_host',
+    'cancellation_pending',
+    'cancellation_requested',
+    'rejected',
+    'declined',
+    'refunded'
+  ].includes(status);
+
+  if (isCancelledOrRejected) {
+    return b;
+  }
+
+  const checkOutStr = b.check_out || b.checkOut;
+  if (checkOutStr) {
+    const todayStr = new Date().toISOString().split('T')[0];
+    const cleanOut = String(checkOutStr).trim().split('T')[0];
+    if (cleanOut <= todayStr) {
+      return {
+        ...b,
+        status: 'completed'
+      };
+    }
+  }
+
+  return b;
+};
+
 const router = express.Router();
 
 let isBookingsTableChecked = false;
@@ -82,6 +118,7 @@ router.post('/', async (req, res) => {
   const finalHostEmail = (host_email || req.body.owner_email || 'host@stayinkonkan.com').trim().toLowerCase();
   const finalHostName = (host_name || req.body.owner_name || 'Local Host').trim();
   const finalCheckIn = (check_in || '').trim();
+  const finalCheckOut = (check_out || '').trim();
   const parseRawGuests = (g) => {
     if (typeof g === 'number') {
       if (g === 21) return 2;
@@ -180,8 +217,9 @@ router.get('/user/:userEmail', async (req, res) => {
       ORDER BY created_at DESC;
     `;
     const result = await query(rawSql, [cleanParam]);
+    const cleanRows = (result?.rows || []).map(normalizeBookingStatus);
 
-    return res.json({ success: true, count: result.rowCount, bookings: result.rows });
+    return res.json({ success: true, count: cleanRows.length, bookings: cleanRows });
   } catch (error) {
     console.error('Fetch user bookings error:', error);
     return res.json({ success: true, count: 0, bookings: [] });
@@ -202,8 +240,9 @@ router.get('/host/:hostEmail', async (req, res) => {
       ORDER BY created_at DESC;
     `;
     const result = await query(rawSql, [hostEmail]);
+    const cleanRows = (result?.rows || []).map(normalizeBookingStatus);
 
-    return res.json({ success: true, count: result.rowCount, bookings: result.rows });
+    return res.json({ success: true, count: cleanRows.length, bookings: cleanRows });
   } catch (error) {
     console.error('Fetch host bookings error:', error);
     return res.json({ success: true, count: 0, bookings: [] });
@@ -221,7 +260,8 @@ router.get('/all', async (req, res) => {
       ORDER BY created_at DESC;
     `;
     const result = await query(rawSql);
-    return res.json({ success: true, count: result.rowCount, bookings: result.rows });
+    const cleanRows = (result?.rows || []).map(normalizeBookingStatus);
+    return res.json({ success: true, count: cleanRows.length, bookings: cleanRows });
   } catch (error) {
     console.error('Fetch all bookings error:', error);
     return res.json({ success: true, count: 0, bookings: [] });
