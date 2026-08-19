@@ -107,10 +107,23 @@ router.get('/', async (req, res) => {
     const result = await query(rawSql, params);
     const dbProperties = (result.rows || []).map(p => {
       const fallbackTitle = p.title && p.title !== 'EMPTY' ? p.title : (p.name && p.name !== 'EMPTY' ? p.name : 'Konkan Homestay');
+      const parsedRooms = typeof p.rooms === 'string' ? (() => { try { return JSON.parse(p.rooms); } catch (e) { return []; } })() : (p.rooms || []);
       return {
         ...p,
         title: fallbackTitle,
-        name: fallbackTitle
+        name: fallbackTitle,
+        hostName: p.host_name || p.host || 'Registered Host',
+        host_name: p.host_name || p.host || 'Registered Host',
+        host: p.host || p.host_name || 'Registered Host',
+        hostPhone: p.host_phone || p.phone || '',
+        host_phone: p.host_phone || p.phone || '',
+        facilityImage1: p.facility1_image || p.facilityImage1 || '',
+        facilityImage2: p.facility2_image || p.facilityImage2 || '',
+        facilityImage3: p.facility3_image || p.facilityImage3 || '',
+        facility1_image: p.facility1_image || p.facilityImage1 || '',
+        facility2_image: p.facility2_image || p.facilityImage2 || '',
+        facility3_image: p.facility3_image || p.facilityImage3 || '',
+        rooms: parsedRooms
       };
     });
     return res.json({ success: true, count: dbProperties.length, properties: dbProperties, data: dbProperties });
@@ -144,8 +157,22 @@ router.get('/:id', async (req, res) => {
 
     const prop = result.rows[0];
     const fallbackTitle = prop.title && prop.title !== 'EMPTY' ? prop.title : (prop.name && prop.name !== 'EMPTY' ? prop.name : 'Konkan Homestay');
+    const parsedRooms = typeof prop.rooms === 'string' ? (() => { try { return JSON.parse(prop.rooms); } catch (e) { return []; } })() : (prop.rooms || []);
+    
     prop.title = fallbackTitle;
     prop.name = fallbackTitle;
+    prop.hostName = prop.host_name || prop.host || 'Registered Host';
+    prop.host_name = prop.host_name || prop.host || 'Registered Host';
+    prop.host = prop.host || prop.host_name || 'Registered Host';
+    prop.hostPhone = prop.host_phone || prop.phone || '';
+    prop.host_phone = prop.host_phone || prop.phone || '';
+    prop.facilityImage1 = prop.facility1_image || prop.facilityImage1 || '';
+    prop.facilityImage2 = prop.facility2_image || prop.facilityImage2 || '';
+    prop.facilityImage3 = prop.facility3_image || prop.facilityImage3 || '';
+    prop.facility1_image = prop.facility1_image || prop.facilityImage1 || '';
+    prop.facility2_image = prop.facility2_image || prop.facilityImage2 || '';
+    prop.facility3_image = prop.facility3_image || prop.facilityImage3 || '';
+    prop.rooms = parsedRooms;
 
     return res.json({ success: true, property: prop });
   } catch (error) {
@@ -173,13 +200,19 @@ router.post('/', async (req, res) => {
     image,
     image_url,
     status,
+    host,
     host_name,
     hostName,
     host_email,
     hostEmail,
+    host_phone,
+    hostPhone,
     facility1_image,
     facility2_image,
     facility3_image,
+    facilityImage1,
+    facilityImage2,
+    facilityImage3,
     rooms
   } = req.body;
 
@@ -188,20 +221,24 @@ router.post('/', async (req, res) => {
   const finalPrice = Number(price || price_per_night || pricePerNight || 1500);
   const finalType = (type || 'homestay').trim().toLowerCase();
   const finalDesc = (description || 'Authentic Konkan homestay listing.').trim();
-  const finalImage = image || image_url || 'https://images.unsplash.com/photo-1540541338287-41700207dee6?auto=format&fit=crop&w=1200&q=80';
-  const finalStatus = (status || 'live').trim().toLowerCase();
+  const finalImage = image || image_url || '/assets/images/properties/konkan_village_home.png';
+  const finalStatus = (status || 'pending').trim().toLowerCase();
   const propId = (id || `prop-${Date.now()}`).trim();
-  const finalHostName = host_name || hostName || 'Registered Host';
+  const finalHostName = host_name || hostName || host || 'Registered Host';
   const finalHostEmail = host_email || hostEmail || 'host@stayinkonkan.com';
+  const finalHostPhone = host_phone || hostPhone || '';
+  const finalFac1 = facility1_image || facilityImage1 || null;
+  const finalFac2 = facility2_image || facilityImage2 || null;
+  const finalFac3 = facility3_image || facilityImage3 || null;
   const finalRooms = typeof rooms === 'string' ? rooms : JSON.stringify(rooms || []);
 
   try {
     const rawSql = `
       INSERT INTO properties (
         id, title, name, location, price, type, description, image, image_url, status,
-        host_name, host_email, facility1_image, facility2_image, facility3_image, rooms, created_at, updated_at
+        host, host_name, host_email, host_phone, facility1_image, facility2_image, facility3_image, rooms, created_at
       )
-      VALUES ($1, $2, $2, $3, $4, $5, $6, $7, $7, $8, $9, $10, $11, $12, $13, $14, NOW(), NOW())
+      VALUES ($1, $2, $2, $3, $4, $5, $6, $7, $7, $8, $9, $9, $10, $11, $12, $13, $14, $15, NOW())
       ON CONFLICT (id) DO UPDATE SET
         title = EXCLUDED.title,
         name = EXCLUDED.name,
@@ -212,7 +249,14 @@ router.post('/', async (req, res) => {
         image = EXCLUDED.image,
         image_url = EXCLUDED.image_url,
         status = EXCLUDED.status,
-        updated_at = NOW()
+        host = EXCLUDED.host,
+        host_name = EXCLUDED.host_name,
+        host_email = EXCLUDED.host_email,
+        host_phone = EXCLUDED.host_phone,
+        facility1_image = EXCLUDED.facility1_image,
+        facility2_image = EXCLUDED.facility2_image,
+        facility3_image = EXCLUDED.facility3_image,
+        rooms = EXCLUDED.rooms
       RETURNING *;
     `;
 
@@ -227,9 +271,10 @@ router.post('/', async (req, res) => {
       finalStatus,
       finalHostName,
       finalHostEmail,
-      facility1_image || null,
-      facility2_image || null,
-      facility3_image || null,
+      finalHostPhone,
+      finalFac1,
+      finalFac2,
+      finalFac3,
       finalRooms
     ]);
 
@@ -274,6 +319,8 @@ router.put('/:id/status', async (req, res) => {
 router.put('/:id', async (req, res) => {
   const { id } = req.params;
   const {
+    originalId,
+    originalTitle,
     title,
     name,
     location,
@@ -286,9 +333,19 @@ router.put('/:id', async (req, res) => {
     image,
     image_url,
     status,
+    host,
+    host_name,
+    hostName,
+    host_email,
+    hostEmail,
+    host_phone,
+    hostPhone,
     facilityImage1,
     facilityImage2,
     facilityImage3,
+    facility1_image,
+    facility2_image,
+    facility3_image,
     rooms
   } = req.body;
 
@@ -299,7 +356,16 @@ router.put('/:id', async (req, res) => {
   const passedDesc = description ? description.trim() : null;
   const passedImage = image || image_url || null;
   const passedStatus = status ? status.trim().toLowerCase() : null;
+  const passedHostName = host_name || hostName || host || null;
+  const passedHostEmail = host_email || hostEmail || null;
+  const passedHostPhone = host_phone || hostPhone || null;
+  const passedFac1 = facility1_image || facilityImage1 || null;
+  const passedFac2 = facility2_image || facilityImage2 || null;
+  const passedFac3 = facility3_image || facilityImage3 || null;
   const passedRooms = rooms !== undefined ? (typeof rooms === 'string' ? rooms : JSON.stringify(rooms || [])) : null;
+
+  const lookupId = (originalId || id || '').trim();
+  const lookupTitle = (originalTitle || title || name || '').trim();
 
   try {
     const rawSql = `
@@ -314,12 +380,20 @@ router.put('/:id', async (req, res) => {
         image = COALESCE($6, image),
         image_url = COALESCE($6, image_url),
         status = COALESCE(NULLIF($7, ''), status),
-        facility1_image = COALESCE($8, facility1_image),
-        facility2_image = COALESCE($9, facility2_image),
-        facility3_image = COALESCE($10, facility3_image),
-        rooms = COALESCE($11, rooms),
-        updated_at = NOW()
-      WHERE LOWER(id) = LOWER($12) OR LOWER(REPLACE(id, '_', '-')) = LOWER(REPLACE($12, '_', '-')) OR LOWER(title) = LOWER($12)
+        host = COALESCE($8, host),
+        host_name = COALESCE($8, host_name),
+        host_email = COALESCE($9, host_email),
+        host_phone = COALESCE($10, host_phone),
+        facility1_image = COALESCE($11, facility1_image),
+        facility2_image = COALESCE($12, facility2_image),
+        facility3_image = COALESCE($13, facility3_image),
+        rooms = COALESCE($14, rooms)
+      WHERE LOWER(id) = LOWER($15) 
+         OR LOWER(REPLACE(id, '_', '-')) = LOWER(REPLACE($15, '_', '-')) 
+         OR LOWER(title) = LOWER($15)
+         OR LOWER(title) = LOWER($16)
+         OR LOWER(name) = LOWER($15)
+         OR LOWER(name) = LOWER($16)
       RETURNING *;
     `;
 
@@ -331,17 +405,70 @@ router.put('/:id', async (req, res) => {
       passedDesc,
       passedImage,
       passedStatus,
-      facilityImage1 || null,
-      facilityImage2 || null,
-      facilityImage3 || null,
+      passedHostName,
+      passedHostEmail,
+      passedHostPhone,
+      passedFac1,
+      passedFac2,
+      passedFac3,
       passedRooms,
-      id.trim()
+      lookupId,
+      lookupTitle
     ]);
+
+    if (!result.rows || result.rows.length === 0) {
+      const propIdToSave = lookupId || `prop-${Date.now()}`;
+      const insertSql = `
+        INSERT INTO properties (id, title, name, location, price, type, description, image, image_url, status, host, host_name, host_email, host_phone, facility1_image, facility2_image, facility3_image, rooms)
+        VALUES ($1, $2, $2, $3, $4, $5, $6, $7, $7, $8, $9, $9, $10, $11, $12, $13, $14, $15)
+        ON CONFLICT (id) DO UPDATE SET
+          title = EXCLUDED.title,
+          name = EXCLUDED.name,
+          location = EXCLUDED.location,
+          price = EXCLUDED.price,
+          type = EXCLUDED.type,
+          description = EXCLUDED.description,
+          image = EXCLUDED.image,
+          image_url = EXCLUDED.image_url,
+          status = EXCLUDED.status,
+          host = EXCLUDED.host,
+          host_name = EXCLUDED.host_name,
+          host_email = EXCLUDED.host_email,
+          host_phone = EXCLUDED.host_phone,
+          facility1_image = EXCLUDED.facility1_image,
+          facility2_image = EXCLUDED.facility2_image,
+          facility3_image = EXCLUDED.facility3_image,
+          rooms = EXCLUDED.rooms
+        RETURNING *;
+      `;
+      const insRes = await query(insertSql, [
+        propIdToSave,
+        passedTitle || 'Konkan Stay',
+        passedLocation || 'Konkan Coast',
+        passedPrice || 1500,
+        passedType || 'homestay',
+        passedDesc || '',
+        passedImage || '/assets/images/properties/konkan_village_home.png',
+        passedStatus || 'live',
+        passedHostName || 'Registered Host',
+        passedHostEmail || 'host@stayinkonkan.com',
+        passedHostPhone || '',
+        passedFac1,
+        passedFac2,
+        passedFac3,
+        passedRooms
+      ]);
+      return res.json({
+        success: true,
+        message: 'Property saved successfully in database!',
+        property: (insRes.rows && insRes.rows[0]) ? insRes.rows[0] : req.body
+      });
+    }
 
     return res.json({
       success: true,
       message: 'Property updated successfully in database!',
-      property: result.rows[0]
+      property: (result.rows && result.rows[0]) ? result.rows[0] : req.body
     });
   } catch (error) {
     console.error('Update property error:', error);

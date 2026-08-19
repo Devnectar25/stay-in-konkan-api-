@@ -87,7 +87,7 @@ router.get('/subscribers', async (req, res) => {
       );
     `);
     const result = await query(`SELECT * FROM newsletter_subscribers ORDER BY subscribed_at DESC`);
-    return res.json({ success: true, count: result.rows.length, data: result.rows });
+    return res.json({ success: true, count: result.rows.length, data: result.rows, subscribers: result.rows });
   } catch (error) {
     console.error('Fetch subscribers error:', error);
     return res.status(500).json({ success: false, message: 'Failed to fetch subscribers' });

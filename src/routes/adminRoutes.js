@@ -339,7 +339,7 @@ router.get('/full-dashboard', async (req, res) => {
       query('SELECT * FROM bookings ORDER BY created_at DESC').catch(() => ({ rows: [] })),
       query("SELECT * FROM host_applications WHERE LOWER(status) = 'pending' OR status IS NULL ORDER BY created_at DESC").catch(() => ({ rows: [] })),
       query('SELECT * FROM contact_messages ORDER BY created_at DESC').catch(() => ({ rows: [] })),
-      query('SELECT * FROM newsletter_subscribers ORDER BY created_at DESC').catch(() => ({ rows: [] })),
+      query('SELECT * FROM newsletter_subscribers ORDER BY subscribed_at DESC').catch(() => query('SELECT * FROM newsletter_subscribers').catch(() => ({ rows: [] }))),
       query('SELECT * FROM cancellations ORDER BY created_at DESC').catch(() => ({ rows: [] })),
       query('SELECT * FROM cancel_bookings ORDER BY created_at DESC').catch(() => ({ rows: [] })),
       query('SELECT * FROM coupons ORDER BY created_at DESC').catch(() => ({ rows: [] })),
@@ -539,7 +539,10 @@ router.put('/properties/:id/status', async (req, res) => {
   }
 
   try {
-    await query('UPDATE properties SET status = $1 WHERE id = $2', [status, id]);
+    await query(
+      `UPDATE properties SET status = $1 WHERE id = $2 OR LOWER(id) = LOWER($2) OR LOWER(title) = LOWER($2) OR LOWER(name) = LOWER($2) OR LOWER(REPLACE(id, '_', '-')) = LOWER(REPLACE($2, '_', '-'))`,
+      [status, id]
+    );
     res.json({ success: true, message: `Property ${id} status updated to ${status}.` });
   } catch (err) {
     console.warn('[Admin API] DB property status update fallback:', err.message);
@@ -568,12 +571,8 @@ router.delete('/properties/:id', async (req, res) => {
  */
 router.get('/users', async (req, res) => {
   try {
-    const dbRes = await query("SELECT id, full_name, email, role, phone, verified, created_at FROM users WHERE LOWER(email) != 'admin@stayinkonkan.com' AND LOWER(role) != 'admin' ORDER BY created_at DESC");
-    const cleanUsers = (dbRes.rows || []).filter(u => {
-      const email = (u.email || '').toLowerCase().trim();
-      const name = (u.full_name || u.name || '').toLowerCase().trim();
-      return email !== 'admin@stayinkonkan.com' && !name.includes('platform admin') && (u.role || '').toLowerCase() !== 'admin';
-    });
+    const dbRes = await query("SELECT id, full_name, email, role, phone, verified, created_at FROM users ORDER BY created_at DESC");
+    const cleanUsers = (dbRes.rows || []).filter(Boolean);
     res.json({ success: true, count: cleanUsers.length, users: cleanUsers });
   } catch (err) {
     console.warn('[Admin API] Users DB query note:', err.message);
@@ -625,9 +624,13 @@ router.put('/users/:id', async (req, res) => {
     // 1. Update PostgreSQL users table
     try {
       if (role !== undefined) {
+        let cleanRole = 'guest';
+        const rStr = String(role).toLowerCase().trim();
+        if (rStr === 'host' || rStr === 'admin' || rStr === 'subadmin') cleanRole = rStr;
+        else if (rStr.includes('subadmin')) cleanRole = 'subadmin';
         await query(
           'UPDATE users SET role = $1, updated_at = NOW() WHERE LOWER(email) = LOWER($2) OR id::text = $3',
-          [role, targetEmail || id, id]
+          [cleanRole, targetEmail || id, id]
         );
       }
       if (verified !== undefined) {
