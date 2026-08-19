@@ -8,7 +8,7 @@ import { query } from '../db.js';
 export const normalizeBookingStatus = (b) => {
   if (!b) return b;
   const status = String(b.status || 'confirmed').toLowerCase().trim();
-  const isCancelledOrRejected = [
+  const isCancelledOrPending = [
     'cancelled',
     'cancelled_by_guest',
     'cancelled_by_host',
@@ -16,10 +16,13 @@ export const normalizeBookingStatus = (b) => {
     'cancellation_requested',
     'rejected',
     'declined',
-    'refunded'
+    'refunded',
+    'pending',
+    'pending_approval',
+    'pending_host_approval'
   ].includes(status);
 
-  if (isCancelledOrRejected) {
+  if (isCancelledOrPending) {
     return b;
   }
 
@@ -27,7 +30,7 @@ export const normalizeBookingStatus = (b) => {
   if (checkOutStr) {
     const todayStr = new Date().toISOString().split('T')[0];
     const cleanOut = String(checkOutStr).trim().split('T')[0];
-    if (cleanOut <= todayStr) {
+    if (cleanOut < todayStr) {
       return {
         ...b,
         status: 'completed'

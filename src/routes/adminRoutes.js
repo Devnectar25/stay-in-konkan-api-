@@ -335,7 +335,7 @@ router.get('/full-dashboard', async (req, res) => {
       configRes
     ] = await Promise.all([
       query('SELECT p.*, u.full_name as owner_name, u.email as owner_email FROM properties p LEFT JOIN users u ON p.host_email = u.email ORDER BY p.created_at DESC').catch(() => ({ rows: [] })),
-      query('SELECT id, full_name, email, role, verified, created_at FROM users ORDER BY created_at DESC').catch(() => ({ rows: [] })),
+      query('SELECT id, full_name, email, role, phone, verified, bank_name, account_number, account_holder_name, ifsc_code, account_type, upi_id, branch_name, bank_details, created_at FROM users ORDER BY created_at DESC').catch(() => ({ rows: [] })),
       query('SELECT * FROM bookings ORDER BY created_at DESC').catch(() => ({ rows: [] })),
       query("SELECT * FROM host_applications WHERE LOWER(status) = 'pending' OR status IS NULL ORDER BY created_at DESC").catch(() => ({ rows: [] })),
       query('SELECT * FROM contact_messages ORDER BY created_at DESC').catch(() => ({ rows: [] })),
@@ -571,7 +571,7 @@ router.delete('/properties/:id', async (req, res) => {
  */
 router.get('/users', async (req, res) => {
   try {
-    const dbRes = await query("SELECT id, full_name, email, role, phone, verified, created_at FROM users ORDER BY created_at DESC");
+    const dbRes = await query("SELECT id, full_name, email, role, phone, verified, bank_name, account_number, account_holder_name, ifsc_code, account_type, upi_id, branch_name, bank_details, created_at FROM users ORDER BY created_at DESC");
     const cleanUsers = (dbRes.rows || []).filter(Boolean);
     res.json({ success: true, count: cleanUsers.length, users: cleanUsers });
   } catch (err) {
