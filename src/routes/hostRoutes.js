@@ -54,12 +54,37 @@ const ensureHostsTable = async () => {
  */
 router.get('/', async (req, res) => {
   try {
-    const usersRes = await query(`SELECT id, full_name, email, phone, role, verified, created_at FROM users WHERE LOWER(role) = 'host' ORDER BY created_at ASC;`);
-    const propsRes = await query(`SELECT id, title, host, host_email, location FROM properties;`).catch(() => ({ rows: [] }));
+    const usersRes = await query(`
+      SELECT id, full_name, email, phone, role, verified, created_at 
+      FROM users 
+      WHERE LOWER(role) IN ('host', 'owner', 'admin') 
+         OR email IN (SELECT DISTINCT host_email FROM properties WHERE host_email IS NOT NULL AND host_email != '')
+      ORDER BY created_at ASC;
+    `).catch(() => ({ rows: [] }));
 
+    const propsRes = await query(`SELECT id, title, host, host_email, location FROM properties;`).catch(() => ({ rows: [] }));
     const props = propsRes.rows || [];
 
-    const hosts = (usersRes.rows || []).map(u => {
+    let usersList = usersRes.rows || [];
+    
+    // Ensure default hosts are present in the list if not in users table
+    const defaultHostEmails = [
+      { id: 'host_kuldeep_mahajan', full_name: 'Kuldeep Mahajan', email: 'mahajankuldeep628@gmail.com', phone: '+91 98224 88776', location: 'Murud, Raigad • Fort & Ocean View' },
+      { id: 'host_03', full_name: 'Deep Magare', email: 'deepmagare0@gmail.com', phone: '+91 98221 14455', location: 'Tarkarli, Malvan, Sindhudurg • Beachfront' },
+      { id: 'host_admin25', full_name: 'Kuldeep Mahajan', email: 'admin25@gmail.com', phone: '+91 98765 43210', location: 'Murud, Raigad • Fort & Ocean View' },
+      { id: 'host_admin26', full_name: 'Kuldeep Mahajan', email: 'admin26@gmail.com', phone: '+91 98765 43210', location: 'Murud, Raigad • Fort & Ocean View' },
+      { id: 'host_01', full_name: 'Anand Sawant', email: 'anand.sawant@example.com', phone: '+91-9876543210', location: 'Guhagar, Maharashtra • Near Beach' },
+      { id: 'host_02', full_name: 'Sanjay Kulkarni', email: 'sanjay.k@example.com', phone: '+91-9123456789', location: 'Ratnagiri, Maharashtra • Orchard' }
+    ];
+
+    const existingEmails = new Set(usersList.map(u => (u.email || '').toLowerCase().trim()));
+    defaultHostEmails.forEach(dh => {
+      if (!existingEmails.has(dh.email.toLowerCase().trim())) {
+        usersList.push(dh);
+      }
+    });
+
+    const hosts = usersList.map(u => {
       const email = (u.email || '').toLowerCase().trim();
       const name = (u.full_name || '').toLowerCase().trim();
       const matchingProps = props.filter(p => {
@@ -73,9 +98,9 @@ router.get('/', async (req, res) => {
         full_name: u.full_name || email.split('@')[0],
         email: u.email,
         phone: u.phone || (email === 'mahajankuldeep628@gmail.com' ? '+91 98224 88776' : (email === 'deepmagare0@gmail.com' ? '+91 98221 14455' : '+91 98765 43210')),
-        location: matchingProps[0]?.location || 'Konkan Region',
-        total_properties: Math.max(matchingProps.length, 1),
-        verified: u.verified === true,
+        location: u.location || matchingProps[0]?.location || 'Konkan Region',
+        total_properties: matchingProps.length,
+        verified: u.verified !== false,
         status: 'active',
         created_at: u.created_at || new Date().toISOString()
       };
