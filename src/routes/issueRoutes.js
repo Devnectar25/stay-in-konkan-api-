@@ -10,7 +10,7 @@ const router = express.Router();
 async function ensureIssueTableExists() {
   try {
     await query(`
-      CREATE TABLE IF NOT EXISTS issue (
+      CREATE TABLE IF NOT EXISTS help_desk (
         id VARCHAR(255) PRIMARY KEY,
         issue_id VARCHAR(255) UNIQUE NOT NULL,
         title VARCHAR(255) NOT NULL,
@@ -29,14 +29,14 @@ async function ensureIssueTableExists() {
     `);
     
     try {
-      await query(`ALTER TABLE issue ADD COLUMN IF NOT EXISTS comments TEXT DEFAULT '[]';`);
+      await query(`ALTER TABLE help_desk ADD COLUMN IF NOT EXISTS comments TEXT DEFAULT '[]';`);
     } catch (e) {}
 
-    await query(`CREATE INDEX IF NOT EXISTS idx_issue_created_at ON issue(created_at DESC);`);
-    await query(`CREATE INDEX IF NOT EXISTS idx_issue_status ON issue(status);`);
-    await query(`CREATE INDEX IF NOT EXISTS idx_issue_priority ON issue(priority);`);
+    await query(`CREATE INDEX IF NOT EXISTS idx_help_desk_created_at ON help_desk(created_at DESC);`);
+    await query(`CREATE INDEX IF NOT EXISTS idx_help_desk_status ON help_desk(status);`);
+    await query(`CREATE INDEX IF NOT EXISTS idx_help_desk_priority ON help_desk(priority);`);
   } catch (err) {
-    console.warn('[Issue Table Init Note]:', err.message);
+    console.warn('[Help Desk Table Init Note]:', err.message);
   }
 }
 
@@ -84,7 +84,7 @@ router.post('/', async (req, res) => {
     const cleanStatus = status || 'Open';
 
     const insertSql = `
-      INSERT INTO issue (
+      INSERT INTO help_desk (
         id, issue_id, title, description, category, user_name, user_email,
         user_phone, priority, status, admin_notes, created_at, updated_at
       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), NOW())
@@ -138,7 +138,7 @@ router.post('/', async (req, res) => {
             admin_notes: defaultNotes2,
             comments: '[]'
           };
-          const restRes = await fetch(`${SUPABASE_URL}/rest/v1/issue`, {
+          const restRes = await fetch(`${SUPABASE_URL}/rest/v1/help_desk`, {
             method: 'POST',
             headers: {
               'apikey': SUPABASE_KEY,
@@ -209,7 +209,7 @@ router.get('/', async (req, res) => {
       limit = 50
     } = req.query;
 
-    let baseSql = `SELECT * FROM issue WHERE 1=1`;
+    let baseSql = `SELECT * FROM help_desk WHERE 1=1`;
     const params = [];
     let paramIndex = 1;
 
@@ -258,7 +258,7 @@ router.get('/', async (req, res) => {
         const SUPABASE_URL = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
         const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY;
         if (SUPABASE_URL && SUPABASE_KEY) {
-          let restUrl = `${SUPABASE_URL}/rest/v1/issue?select=*&order=created_at.desc&limit=${parseInt(limit, 10)}&offset=${offset}`;
+          let restUrl = `${SUPABASE_URL}/rest/v1/help_desk?select=*&order=created_at.desc&limit=${parseInt(limit, 10)}&offset=${offset}`;
           if (status && status !== 'all') restUrl += `&status=ilike.${encodeURIComponent(status)}`;
           if (priority && priority !== 'all') restUrl += `&priority=ilike.${encodeURIComponent(priority)}`;
           if (category && category !== 'all') restUrl += `&category=ilike.${encodeURIComponent(category)}`;
@@ -303,9 +303,9 @@ router.get('/:id', async (req, res) => {
     let foundIssue = null;
     try {
       const dbRes = await query(
-        `SELECT * FROM issue WHERE id ILIKE $1 OR issue_id ILIKE $1 LIMIT 1`,
+        `SELECT * FROM help_desk WHERE id ILIKE $1 OR issue_id ILIKE $1 LIMIT 1`,
         [cleanId]
-      );
+      ).catch(() => query(`SELECT * FROM issue WHERE id ILIKE $1 OR issue_id ILIKE $1 LIMIT 1`, [cleanId]));
       if (dbRes && dbRes.rows && dbRes.rows[0]) {
         foundIssue = dbRes.rows[0];
       }
@@ -342,7 +342,7 @@ router.patch('/:id', async (req, res) => {
     const { id } = req.params;
     const { status, priority, category, admin_notes } = req.body;
 
-    let updateSql = `UPDATE issue SET updated_at = NOW()`;
+    let updateSql = `UPDATE help_desk SET updated_at = NOW()`;
     const params = [];
     let idx = 1;
 
@@ -406,7 +406,8 @@ router.post('/:id/comments', async (req, res) => {
     // Fetch existing issue to read current comments
     let existingIssue = null;
     try {
-      const getRes = await query(`SELECT * FROM issue WHERE id = $1 OR issue_id = $1 LIMIT 1`, [id]);
+      const getRes = await query(`SELECT * FROM help_desk WHERE id = $1 OR issue_id = $1 LIMIT 1`, [id])
+        .catch(() => query(`SELECT * FROM issue WHERE id = $1 OR issue_id = $1 LIMIT 1`, [id]));
       if (getRes && getRes.rows && getRes.rows[0]) {
         existingIssue = getRes.rows[0];
       }
@@ -455,7 +456,7 @@ router.post('/:id/comments', async (req, res) => {
     let updatedIssue = null;
     try {
       const byIdRes = await query(
-        `UPDATE issue SET ${setSql} WHERE id = $${idParam} RETURNING *;`,
+        `UPDATE help_desk SET ${setSql} WHERE id = $${idParam} RETURNING *;`,
         baseParams
       );
       if (byIdRes && byIdRes.rows && byIdRes.rows[0]) {
@@ -469,7 +470,7 @@ router.post('/:id/comments', async (req, res) => {
     if (!updatedIssue) {
       try {
         const byIssueIdRes = await query(
-          `UPDATE issue SET ${setSql} WHERE issue_id = $${idParam} RETURNING *;`,
+          `UPDATE help_desk SET ${setSql} WHERE issue_id = $${idParam} RETURNING *;`,
           baseParams
         );
         if (byIssueIdRes && byIssueIdRes.rows && byIssueIdRes.rows[0]) {
@@ -502,7 +503,8 @@ router.delete('/:id', async (req, res) => {
     const { id } = req.params;
 
     try {
-      await query(`DELETE FROM issue WHERE id = $1 OR issue_id = $1`, [id]);
+      await query(`DELETE FROM help_desk WHERE id = $1 OR issue_id = $1`, [id])
+        .catch(() => query(`DELETE FROM issue WHERE id = $1 OR issue_id = $1`, [id]));
     } catch (e) {}
 
     return res.json({ success: true, message: `Issue ${id} deleted successfully.` });

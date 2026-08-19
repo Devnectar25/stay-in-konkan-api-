@@ -334,18 +334,18 @@ router.put('/:id/status', async (req, res) => {
   try {
     await ensureTableExists();
     await query(
-      'UPDATE cancel_bookings SET status = $1, updated_at = NOW() WHERE id = $2 OR booking_id = $2',
-      [status, id]
+      'UPDATE cancel_bookings SET status = $1, updated_at = NOW() WHERE id = $2 OR booking_id = $2 OR id = $3 OR booking_id = $3',
+      [status, id, finalBookingId]
     );
     await query(
-      'UPDATE cancellations SET status = $1 WHERE id = $2 OR booking_id = $2',
-      [status, id]
+      'UPDATE cancellations SET status = $1 WHERE id = $2 OR booking_id = $2 OR id = $3 OR booking_id = $3',
+      [status, id, finalBookingId]
     );
 
     if (finalBookingId) {
       await query(
-        'UPDATE bookings SET status = $1 WHERE id = $2 OR booking_id = $2 OR payment_id = $2',
-        [newBookingStatus, finalBookingId]
+        'UPDATE bookings SET status = $1 WHERE id = $2 OR booking_id = $2 OR payment_id = $2 OR id = $3 OR booking_id = $3',
+        [newBookingStatus, id, finalBookingId]
       );
     }
 

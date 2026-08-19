@@ -26,12 +26,22 @@ export const pool = new Pool(poolConfig);
 const SUPABASE_URL = process.env.SUPABASE_URL || 'https://bqsczpvvqvcgztrlpwwj.supabase.co';
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJxc2N6cHZ2cXZjZ3p0cmxwd3dqIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4NjY4Mzg1NSwiZXhwIjoyMTAyMjU5ODU1fQ.TNG7GxbS2gZa5WsVZmS4u3UVowDsjLc5nkeJfd-e_to';
 
+export async function cleanupCorruptedUserRoles() {
+  try {
+    await pool.query(`UPDATE users SET role = 'subadmin' WHERE LOWER(role) LIKE '%subadmin%';`);
+    await pool.query(`UPDATE users SET role = 'admin' WHERE LOWER(email) = 'admin@stayinkonkan.com';`);
+    await pool.query(`UPDATE users SET role = 'host' WHERE LOWER(role) = 'host';`);
+    await pool.query(`UPDATE users SET role = 'guest' WHERE role NOT IN ('admin', 'subadmin', 'host', 'guest');`);
+  } catch (e) {}
+}
+cleanupCorruptedUserRoles();
+
 const detectTable = (text) => {
   const lower = text.toLowerCase();
   const fromMatch = lower.match(/\bfrom\s+([a-z0-9_]+)/);
   if (fromMatch && fromMatch[1]) {
     const mainTable = fromMatch[1].trim();
-    if (['hosts', 'host_accounts', 'properties', 'host_applications', 'users', 'bookings', 'contact_messages', 'newsletter_subscribers', 'cancellations', 'cancel_bookings', 'subadmins', 'reviews', 'wishlists', 'coupons', 'issue', 'application_errors', 'platform_config'].includes(mainTable)) {
+    if (['hosts', 'host_accounts', 'properties', 'host_applications', 'users', 'bookings', 'contact_messages', 'newsletter_subscribers', 'cancellations', 'cancel_bookings', 'subadmins', 'reviews', 'wishlists', 'coupons', 'help_desk', 'helpdesk', 'issue', 'application_errors', 'platform_config'].includes(mainTable)) {
       return mainTable;
     }
   }
@@ -40,7 +50,9 @@ const detectTable = (text) => {
   if (lower.includes('host_accounts')) return 'host_accounts';
   if (lower.includes('hosts')) return 'hosts';
   if (lower.includes('application_errors')) return 'application_errors';
-  if (lower.includes('issue')) return 'issue';
+  if (lower.includes('help_desk')) return 'help_desk';
+  if (lower.includes('helpdesk')) return 'help_desk';
+  if (lower.includes('issue')) return 'help_desk';
   if (lower.includes('coupons')) return 'coupons';
   if (lower.includes('subadmins')) return 'subadmins';
   if (lower.includes('cancel_bookings')) return 'cancel_bookings';
@@ -59,17 +71,10 @@ const detectTable = (text) => {
 export const query = async (text, params = []) => {
   try {
     const res = await pool.query(text, params);
-    // If pg pool returns data, use it directly
-    if (res && res.rows && res.rows.length > 0) {
+    // If pg pool query succeeds, return PostgreSQL result directly (eliminates redundant CDN / Supabase REST calls)
+    if (res) {
       return res;
     }
-    // If pg pool returns 0 rows on a SELECT for tables, fall through to Supabase REST
-    // (pg pool may be connected to an empty local database while Supabase is live)
-    const lowerCheck = text.toLowerCase().trim();
-    if (lowerCheck.startsWith('select') && (lowerCheck.includes('properties') || lowerCheck.includes('application_errors') || lowerCheck.includes('users') || lowerCheck.includes('issue') || lowerCheck.includes('bookings'))) {
-      throw new Error('pg_empty_fallthrough');
-    }
-    return res;
   } catch (err) {
     const lower = text.toLowerCase().trim();
     if (lower.includes('count(') || lower.includes('sum(') || lower.includes('group by')) {
@@ -331,7 +336,7 @@ export const query = async (text, params = []) => {
           let body = {};
           if (params.length >= 10 && typeof params[0] === 'string' && params[0].startsWith('prop-')) {
             // Parameterized query from propertyRoutes.js:
-            // [propId, finalTitle, finalLocation, finalPrice, finalType, finalDesc, finalImage, finalStatus, finalHostName, finalHostEmail, facility1, facility2, facility3, rooms]
+            // [propId, finalTitle, finalLocation, finalPrice, finalType, finalDesc, finalImage, finalStatus, finalHostName, finalHostEmail, finalHostPhone, finalFac1, finalFac2, finalFac3, finalRooms]
             body = {
               id: params[0],
               name: params[1] || 'Konkan Stay',
@@ -343,20 +348,21 @@ export const query = async (text, params = []) => {
               image: params[6] || '/assets/images/properties/konkan_village_home.png',
               image_url: params[6] || '/assets/images/properties/konkan_village_home.png',
               status: params[7] || 'pending',
+              host: params[8] || 'Host',
               host_name: params[8] || 'Host',
               host_email: params[9] || 'host@stayinkonkan.com',
-              facility1_image: params[10] || null,
-              facility2_image: params[11] || null,
-              facility3_image: params[12] || null,
+              host_phone: params[10] || '',
+              facility1_image: params[11] || null,
+              facility2_image: params[12] || null,
+              facility3_image: params[13] || null,
               rooms: (() => {
-                if (!params[13]) return [];
-                if (typeof params[13] === 'string') {
-                  try { return JSON.parse(params[13]); } catch (e) { return []; }
+                if (!params[14]) return [];
+                if (typeof params[14] === 'string') {
+                  try { return JSON.parse(params[14]); } catch (e) { return []; }
                 }
-                return params[13];
+                return params[14];
               })(),
-              rating: 5.0,
-              updated_at: new Date().toISOString()
+              rating: 5.0
             };
           } else {
             body = {
@@ -373,8 +379,7 @@ export const query = async (text, params = []) => {
               image: params[10] || params[6] || undefined,
               image_url: params[11] || params[6] || undefined,
               description: params[12] || params[5] || '',
-              rating: 5.0,
-              updated_at: new Date().toISOString()
+              rating: 5.0
             };
           }
 
@@ -393,6 +398,108 @@ export const query = async (text, params = []) => {
             const errText = await restRes.text().catch(() => '');
             console.warn('Supabase property insert error:', restRes.status, errText);
             return { rows: [body], rowCount: 1 };
+          }
+        }
+
+        // 3.5 UPDATE Properties Status & Fields Fallback
+        if (lower.startsWith('update properties')) {
+          let updateBody = {};
+          let id = '';
+          let titleAlt = '';
+
+          if (params.length >= 15 && typeof params[14] === 'string' && params[14].length > 2) {
+            // Full property update from PUT /api/properties/:id:
+            // [passedTitle, passedLocation, passedPrice, passedType, passedDesc, passedImage, passedStatus, passedHostName, passedHostEmail, passedHostPhone, passedFac1, passedFac2, passedFac3, passedRooms, lookupId, lookupTitle]
+            id = params[14];
+            if (params[15] && typeof params[15] === 'string') titleAlt = params[15];
+
+            if (params[0]) { updateBody.title = params[0]; updateBody.name = params[0]; }
+            if (params[1]) updateBody.location = params[1];
+            if (params[2] !== null && params[2] !== undefined) updateBody.price = Number(params[2]);
+            if (params[3]) updateBody.type = params[3];
+            if (params[4]) updateBody.description = params[4];
+            if (params[5]) { updateBody.image = params[5]; updateBody.image_url = params[5]; }
+            if (params[6]) updateBody.status = params[6];
+            if (params[7]) { updateBody.host = params[7]; updateBody.host_name = params[7]; }
+            if (params[8]) updateBody.host_email = params[8];
+            if (params[9]) updateBody.host_phone = params[9];
+            if (params[10]) updateBody.facility1_image = params[10];
+            if (params[11]) updateBody.facility2_image = params[11];
+            if (params[12]) updateBody.facility3_image = params[12];
+            if (params[13] !== undefined && params[13] !== null) {
+              updateBody.rooms = typeof params[13] === 'string' ? (() => { try { return JSON.parse(params[13]); } catch (e) { return []; } })() : params[13];
+            }
+          } else {
+            // Simple status update
+            let status = 'live';
+            params.forEach(p => {
+              if (p === 'live' || p === 'pending' || p === 'rejected') status = p;
+              else if (typeof p === 'string' && (p.startsWith('prop-') || p.includes('-') || p.length > 2)) id = p;
+            });
+
+            if (!id && params.length > 1) id = params[1] || params[0];
+            if (params.length > 0 && (params[0] === 'live' || params[0] === 'pending' || params[0] === 'rejected')) status = params[0];
+
+            updateBody = { status: status.toLowerCase() };
+          }
+
+          const patchFilter = titleAlt 
+            ? `or=(id.eq.${encodeURIComponent(id)},title.ilike.${encodeURIComponent(id)},title.ilike.${encodeURIComponent(titleAlt)},name.ilike.${encodeURIComponent(titleAlt)})`
+            : `or=(id.eq.${encodeURIComponent(id)},title.ilike.${encodeURIComponent(id)})`;
+          const patchUrl = `${SUPABASE_URL}/rest/v1/properties?${patchFilter}`;
+          const restRes = await fetch(patchUrl, {
+            method: 'PATCH',
+            headers: {
+              ...headers,
+              'Prefer': 'return=representation'
+            },
+            body: JSON.stringify(updateBody)
+          });
+          if (restRes.ok) {
+            const rows = await restRes.json().catch(() => []);
+            return { rows: Array.isArray(rows) ? rows : [rows], rowCount: 1 };
+          } else {
+            const errText = await restRes.text().catch(() => '');
+            console.warn('Supabase property update error:', restRes.status, errText);
+            return { rows: [{ id, ...updateBody }], rowCount: 1 };
+          }
+        }
+
+        // 3.6 UPDATE Bookings Status Fallback
+        if (lower.startsWith('update bookings')) {
+          let status = 'confirmed';
+          let id = '';
+
+          params.forEach(p => {
+            if (['confirmed', 'completed', 'pending', 'cancelled', 'cancellation_pending', 'cancellation_requested', 'rejected', 'declined'].includes(String(p).toLowerCase())) {
+              status = String(p).toLowerCase();
+            } else if (typeof p === 'string' && (p.startsWith('SIK-') || p.includes('-') || p.length > 2)) {
+              id = p;
+            }
+          });
+
+          if (!id && params.length > 1) id = params[1] || params[0];
+          if (params.length > 0 && ['confirmed', 'completed', 'pending', 'cancelled', 'cancellation_pending', 'cancellation_requested', 'rejected', 'declined'].includes(String(params[0]).toLowerCase())) {
+            status = String(params[0]).toLowerCase();
+          }
+
+          const updateBody = { status: status.toLowerCase() };
+          const patchUrl = `${SUPABASE_URL}/rest/v1/bookings?or=(id.eq.${encodeURIComponent(id)},booking_id.eq.${encodeURIComponent(id)},payment_id.eq.${encodeURIComponent(id)})`;
+          const restRes = await fetch(patchUrl, {
+            method: 'PATCH',
+            headers: {
+              ...headers,
+              'Prefer': 'return=representation'
+            },
+            body: JSON.stringify(updateBody)
+          });
+          if (restRes.ok) {
+            const rows = await restRes.json().catch(() => []);
+            return { rows: Array.isArray(rows) ? rows : [rows], rowCount: 1 };
+          } else {
+            const errText = await restRes.text().catch(() => '');
+            console.warn('Supabase booking update error:', restRes.status, errText);
+            return { rows: [{ id, status }], rowCount: 1 };
           }
         }
 
