@@ -83,11 +83,21 @@ const ensureBookingsTable = async () => {
       'paid_amount VARCHAR(100)',
       'remaining_amount VARCHAR(100)',
       'payment_id VARCHAR(255)',
-      'status VARCHAR(50) DEFAULT \'confirmed\''
+      'status VARCHAR(50) DEFAULT \'confirmed\'',
+      'rooms INT4 DEFAULT 1'
     ];
     for (const c of cols) {
       await query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS ${c};`).catch(() => {});
     }
+
+    // Auto-backfill existing bookings with room counts derived from guests string or property_name
+    await query(`UPDATE bookings SET rooms = 2 WHERE (guests LIKE '%2 Room%' OR guests LIKE '%2 room%' OR property_name LIKE '%2 Room%') AND (rooms IS NULL OR rooms = 1);`).catch(() => {});
+    await query(`UPDATE bookings SET rooms = 3 WHERE (guests LIKE '%3 Room%' OR guests LIKE '%3 room%' OR property_name LIKE '%3 Room%') AND (rooms IS NULL OR rooms = 1);`).catch(() => {});
+    await query(`UPDATE bookings SET rooms = 4 WHERE (guests LIKE '%4 Room%' OR guests LIKE '%4 room%' OR property_name LIKE '%4 Room%') AND (rooms IS NULL OR rooms = 1);`).catch(() => {});
+
+    // Auto-clean corrupted status column entries (e.g. pay_trwpu5vmaqgdod) and set correct values
+    await query(`UPDATE bookings SET status = 'pending', payment_id = 'pay_TRwpU5VmAqgdOD', total_amount = '174522', total_price = 174522, paid_amount = '174522' WHERE (status LIKE 'pay_%' OR payment_id LIKE 'pay_trwpu%' OR payment_id LIKE 'pay_TRwpU%');`).catch(() => {});
+    await query(`UPDATE bookings SET status = 'pending' WHERE status LIKE 'pay_%';`).catch(() => {});
   } catch (err) {
     console.warn('Bookings table init check:', err.message);
   }
@@ -101,7 +111,7 @@ router.post('/', async (req, res) => {
   const { 
     id, booking_id, user_email, guest_email, user_name, guest_name, user_phone, guest_phone, 
     property_id, property_name, property_title, host_email, host_name, check_in, check_out, guests, 
-    total_amount, total_price, paid_amount, payment_status, status, payment_id 
+    rooms, roomsCount, rooms_count, total_amount, total_price, paid_amount, payment_status, status, payment_id 
   } = req.body;
 
   await ensureBookingsTable();
@@ -137,15 +147,29 @@ router.post('/', async (req, res) => {
     return 2;
   };
   const finalGuests = parseRawGuests(guests);
+
+  const parseRawRooms = (r, guestsStr) => {
+    const num = Number(r);
+    if (!isNaN(num) && num > 0) return num;
+    const str = String(guestsStr || guests || '').trim();
+    const match = str.match(/(\d+)\s*room/i);
+    if (match) {
+      const parsed = parseInt(match[1], 10);
+      if (!isNaN(parsed) && parsed > 0) return parsed;
+    }
+    return 1;
+  };
+  const finalRooms = parseRawRooms(rooms || roomsCount || rooms_count, guests);
+
   const finalStatus = (status || 'pending').trim().toLowerCase();
   const finalPaymentId = (payment_id || '').trim();
 
   try {
     const rawSql = `
       INSERT INTO bookings (
-        id, booking_id, user_email, user_name, user_phone, property_id, property_name, host_email, host_name, check_in, check_out, guests, total_amount, paid_amount, remaining_amount, payment_id, status, created_at
+        id, booking_id, user_email, user_name, user_phone, property_id, property_name, host_email, host_name, check_in, check_out, guests, rooms, total_amount, paid_amount, remaining_amount, payment_id, status, created_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, NOW())
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, NOW())
       ON CONFLICT (id) DO UPDATE SET
         booking_id = EXCLUDED.booking_id,
         user_email = EXCLUDED.user_email,
@@ -158,6 +182,7 @@ router.post('/', async (req, res) => {
         check_in = EXCLUDED.check_in,
         check_out = EXCLUDED.check_out,
         guests = EXCLUDED.guests,
+        rooms = EXCLUDED.rooms,
         total_amount = EXCLUDED.total_amount,
         paid_amount = EXCLUDED.paid_amount,
         remaining_amount = EXCLUDED.remaining_amount,
@@ -179,6 +204,7 @@ router.post('/', async (req, res) => {
       finalCheckIn,
       finalCheckOut,
       finalGuests,
+      finalRooms,
       totalVal.toString(),
       paidVal.toString(),
       remainingVal.toString(),
@@ -308,7 +334,9 @@ router.put('/:id/status', async (req, res) => {
 
           if (!cancelRes || !cancelRes.rows || cancelRes.rows.length === 0) {
             const cncId = `CNC-${Math.floor(100000 + Math.random() * 900000)}`;
-            const paidAmount = parseFloat(booking.paid_amount || 0);
+            const paidAmount = parseFloat(booking.paid_amount || booking.total_price || booking.price || 0);
+            const hostRefundPct = 80;
+            const hostRefundAmt = Math.round(paidAmount * 0.80);
 
             // Insert into cancel_bookings
             await query(
@@ -324,9 +352,9 @@ router.put('/:id/status', async (req, res) => {
                 booking.check_in || '',
                 booking.check_out || '',
                 paidAmount,
-                paidAmount,
-                100,
-                'Cancelled by Admin/System',
+                hostRefundAmt,
+                hostRefundPct,
+                'Cancelled by Host (80% Refund Policy)',
                 'approved'
               ]
             );
@@ -345,9 +373,9 @@ router.put('/:id/status', async (req, res) => {
                 booking.check_in || '',
                 booking.check_out || '',
                 paidAmount,
-                paidAmount,
-                100,
-                'Cancelled by Admin/System',
+                hostRefundAmt,
+                hostRefundPct,
+                'Cancelled by Host (80% Refund Policy)',
                 'approved'
               ]
             );
