@@ -172,10 +172,24 @@ router.post('/', async (req, res) => {
   const finalCheckIn = check_in || checkIn || '';
   const finalCheckOut = check_out || checkOut || '';
   const finalPaid = parseFloat(paid_amount || paidAmount || paid || 0);
-  const finalRefund = parseFloat(refund_amount || refundAmount || 0);
-  const finalPct = parseInt(refund_percentage || refundPercentage || 0, 10);
+  let rawRefund = parseFloat(refund_amount || refundAmount || 0);
+  let rawPct = parseInt(refund_percentage || refundPercentage || 0, 10);
+  let baseReason = cancellation_reason || cancellationReason || 'Guest requested cancellation';
+
+  const reasonLower = (baseReason + ' ' + (req.body.cancelled_by || '') + ' ' + (req.body.initiated_by || '')).toLowerCase();
+  const isHostCancelled = req.body.cancelled_by === 'host' || req.body.initiated_by === 'host' || req.body.cancelled_by_host === true || reasonLower.includes('host') || reasonLower.includes('owner');
+
+  if (isHostCancelled) {
+    rawPct = 80;
+    rawRefund = Math.round(finalPaid * 0.80);
+    if (!baseReason.toLowerCase().includes('host')) {
+      baseReason = `Host cancelled booking (80% Refund Policy: ₹${rawRefund})`;
+    }
+  }
+
+  const finalRefund = rawRefund;
+  const finalPct = rawPct;
   const finalDays = parseInt(notice_days || noticeDays || 0, 10);
-  const baseReason = cancellation_reason || cancellationReason || 'Guest requested cancellation';
   const finalStatus = status || 'requested';
 
   const finalBankName = bank_name || bankName || null;

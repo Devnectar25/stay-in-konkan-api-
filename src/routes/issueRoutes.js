@@ -138,7 +138,7 @@ router.post('/', async (req, res) => {
             admin_notes: defaultNotes2,
             comments: '[]'
           };
-          const restRes = await fetch(`${SUPABASE_URL}/rest/v1/help_desk`, {
+          const restRes = await fetch(`${SUPABASE_URL}/rest/v1/${encodeURIComponent('Help Desk')}`, {
             method: 'POST',
             headers: {
               'apikey': SUPABASE_KEY,
@@ -152,8 +152,21 @@ router.post('/', async (req, res) => {
             const rows = await restRes.json();
             newIssue = Array.isArray(rows) ? rows[0] : rows;
           } else {
-            const errText = await restRes.text().catch(() => '');
-            console.warn('[Issue Supabase REST Insert Error]:', restRes.status, errText);
+            // Also try posting to 'issue' table
+            const restRes2 = await fetch(`${SUPABASE_URL}/rest/v1/issue`, {
+              method: 'POST',
+              headers: {
+                'apikey': SUPABASE_KEY,
+                'Authorization': `Bearer ${SUPABASE_KEY}`,
+                'Content-Type': 'application/json',
+                'Prefer': 'return=representation'
+              },
+              body: JSON.stringify(body)
+            });
+            if (restRes2.ok) {
+              const rows2 = await restRes2.json();
+              newIssue = Array.isArray(rows2) ? rows2[0] : rows2;
+            }
           }
         }
       } catch (fbErr) {
