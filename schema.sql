@@ -85,29 +85,6 @@ CREATE TABLE IF NOT EXISTS cancellations (
 CREATE INDEX IF NOT EXISTS idx_cancellations_booking_id ON cancellations(booking_id);
 CREATE INDEX IF NOT EXISTS idx_cancellations_user_email ON cancellations(user_email);
 
-CREATE TABLE IF NOT EXISTS cancel_bookings (
-    id VARCHAR(255) PRIMARY KEY,
-    booking_id VARCHAR(255) NOT NULL,
-    user_email VARCHAR(255) NOT NULL,
-    user_name VARCHAR(255),
-    property_name VARCHAR(255),
-    check_in VARCHAR(100),
-    check_out VARCHAR(100),
-    paid_amount NUMERIC(10, 2) DEFAULT 0,
-    refund_amount NUMERIC(10, 2) DEFAULT 0,
-    refund_percentage INT DEFAULT 0,
-    notice_days INT DEFAULT 0,
-    cancellation_reason TEXT DEFAULT 'Guest requested cancellation',
-    status VARCHAR(50) DEFAULT 'requested',
-    refund_status VARCHAR(50) DEFAULT 'pending',
-    refund_txn_id VARCHAR(255),
-    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-);
-
-CREATE INDEX IF NOT EXISTS idx_cancel_bookings_booking_id ON cancel_bookings(booking_id);
-CREATE INDEX IF NOT EXISTS idx_cancel_bookings_user_email ON cancel_bookings(user_email);
-
 -- 7. Create Subadmins Table
 CREATE TABLE IF NOT EXISTS subadmins (
     id VARCHAR(255) PRIMARY KEY,
@@ -240,3 +217,70 @@ CREATE TABLE IF NOT EXISTS platform_config (
 INSERT INTO platform_config (id, key, token_percentage, service_fee_percentage, min_advance_percentage, contact_email, contact_phone)
 VALUES ('default', 'general_settings', 20.00, 5.00, 20.00, 'support@stayinkonkan.com', '+91 98000 00000')
 ON CONFLICT (id) DO NOTHING;
+
+-- 15. Create Bank Details Table
+CREATE TABLE IF NOT EXISTS bank_details (
+    id VARCHAR(255) PRIMARY KEY,
+    user_email VARCHAR(255) NOT NULL,
+    account_holder_name VARCHAR(255),
+    user_type VARCHAR(50) DEFAULT 'user',
+    bank_name VARCHAR(255),
+    account_number VARCHAR(255),
+    ifsc_code VARCHAR(50),
+    upi_id VARCHAR(255),
+    branch_name VARCHAR(255),
+    account_type VARCHAR(50) DEFAULT 'savings',
+    is_primary BOOLEAN DEFAULT true,
+    verified_status VARCHAR(50) DEFAULT 'verified',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_bank_details_user_email ON bank_details(user_email);
+
+-- 16. Create Host Applications Table
+CREATE TABLE IF NOT EXISTS host_applications (
+    id VARCHAR(255) PRIMARY KEY,
+    application_id VARCHAR(255),
+    applicant_name VARCHAR(255),
+    applicant_email VARCHAR(255),
+    phone VARCHAR(255),
+    location VARCHAR(255),
+    property_type VARCHAR(255),
+    description TEXT,
+    custom_property_name VARCHAR(255),
+    property_doc_name VARCHAR(255),
+    gst_doc_name VARCHAR(255),
+    identity_doc_name VARCHAR(255),
+    status VARCHAR(50) DEFAULT 'pending',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_host_applications_email ON host_applications(applicant_email);
+
+-- 17. Create Reviews Table
+CREATE TABLE IF NOT EXISTS reviews (
+    id VARCHAR(255) PRIMARY KEY,
+    property_id VARCHAR(255) NOT NULL,
+    guest_name VARCHAR(255),
+    user_email VARCHAR(255),
+    rating NUMERIC(3, 1) DEFAULT 5,
+    comment TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_reviews_property_id ON reviews(property_id);
+
+-- 18. Create Coupons Table
+CREATE TABLE IF NOT EXISTS coupons (
+    id VARCHAR(100) PRIMARY KEY,
+    code VARCHAR(100) UNIQUE NOT NULL,
+    discount_type VARCHAR(50) DEFAULT 'percentage',
+    discount_value NUMERIC(10, 2) NOT NULL,
+    min_booking NUMERIC(10, 2) DEFAULT 0,
+    apply_to VARCHAR(100) DEFAULT 'All Products',
+    max_uses INT DEFAULT 100,
+    times_used INT DEFAULT 0,
+    active BOOLEAN DEFAULT true,
+    is_private BOOLEAN DEFAULT false,
+    expiry VARCHAR(50) DEFAULT '2026-12-31',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+

@@ -8,37 +8,10 @@ import { query } from '../db.js';
 export const normalizeBookingStatus = (b) => {
   if (!b) return b;
   const status = String(b.status || 'confirmed').toLowerCase().trim();
-  const isCancelledOrPending = [
-    'cancelled',
-    'cancelled_by_guest',
-    'cancelled_by_host',
-    'cancellation_pending',
-    'cancellation_requested',
-    'rejected',
-    'declined',
-    'refunded',
-    'pending',
-    'pending_approval',
-    'pending_host_approval'
-  ].includes(status);
-
-  if (isCancelledOrPending) {
-    return b;
-  }
-
-  const checkOutStr = b.check_out || b.checkOut;
-  if (checkOutStr) {
-    const todayStr = new Date().toISOString().split('T')[0];
-    const cleanOut = String(checkOutStr).trim().split('T')[0];
-    if (cleanOut < todayStr) {
-      return {
-        ...b,
-        status: 'completed'
-      };
-    }
-  }
-
-  return b;
+  return {
+    ...b,
+    status: status
+  };
 };
 
 const router = express.Router();
@@ -53,16 +26,21 @@ const ensureBookingsTable = async () => {
         id VARCHAR(255) PRIMARY KEY,
         booking_id VARCHAR(255),
         user_email VARCHAR(255),
+        guest_email VARCHAR(255),
         user_name VARCHAR(255),
+        guest_name VARCHAR(255),
         user_phone VARCHAR(255),
+        guest_phone VARCHAR(255),
         property_id VARCHAR(255),
         property_name VARCHAR(255),
+        property_title VARCHAR(255),
         host_email VARCHAR(255),
         host_name VARCHAR(255),
         check_in VARCHAR(255),
         check_out VARCHAR(255),
         guests VARCHAR(100),
         total_amount VARCHAR(100),
+        total_price VARCHAR(100),
         paid_amount VARCHAR(100),
         remaining_amount VARCHAR(100),
         payment_id VARCHAR(255),
@@ -105,7 +83,7 @@ const ensureBookingsTable = async () => {
 
 /**
  * POST /api/bookings
- * Raw SQL query to insert a new booking
+ * Inserts a new booking directly into PostgreSQL database table [bookings]
  */
 router.post('/', async (req, res) => {
   const { 
@@ -132,20 +110,13 @@ router.post('/', async (req, res) => {
   const finalHostName = (host_name || req.body.owner_name || 'Local Host').trim();
   const finalCheckIn = (check_in || '').trim();
   const finalCheckOut = (check_out || '').trim();
+
   const parseRawGuests = (g) => {
-    if (typeof g === 'number') {
-      if (g === 21) return 2;
-      return g;
-    }
-    const str = String(g || '').trim();
-    const match = str.match(/^(\d+)/) || str.match(/(\d+)\s*guest/i);
-    if (match) {
-      const n = parseInt(match[1], 10);
-      if (n === 21 && str.includes('1 Room')) return 2;
-      if (!isNaN(n) && n > 0) return n;
-    }
-    return 2;
+    if (typeof g === 'number') return `${g} Guests`;
+    const str = String(g || '2 Guests').trim();
+    return str.includes('Guest') ? str : `${str} Guests`;
   };
+
   const finalGuests = parseRawGuests(guests);
 
   const parseRawRooms = (r, guestsStr) => {
@@ -173,10 +144,14 @@ router.post('/', async (req, res) => {
       ON CONFLICT (id) DO UPDATE SET
         booking_id = EXCLUDED.booking_id,
         user_email = EXCLUDED.user_email,
+        guest_email = EXCLUDED.guest_email,
         user_name = EXCLUDED.user_name,
+        guest_name = EXCLUDED.guest_name,
         user_phone = EXCLUDED.user_phone,
+        guest_phone = EXCLUDED.guest_phone,
         property_id = EXCLUDED.property_id,
         property_name = EXCLUDED.property_name,
+        property_title = EXCLUDED.property_title,
         host_email = EXCLUDED.host_email,
         host_name = EXCLUDED.host_name,
         check_in = EXCLUDED.check_in,
@@ -184,6 +159,7 @@ router.post('/', async (req, res) => {
         guests = EXCLUDED.guests,
         rooms = EXCLUDED.rooms,
         total_amount = EXCLUDED.total_amount,
+        total_price = EXCLUDED.total_price,
         paid_amount = EXCLUDED.paid_amount,
         remaining_amount = EXCLUDED.remaining_amount,
         payment_id = EXCLUDED.payment_id,
@@ -216,8 +192,8 @@ router.post('/', async (req, res) => {
 
     return res.json({ 
       success: true, 
-      message: 'Booking created successfully', 
-      booking: (result && result.rows && result.rows[0]) ? result.rows[0] : { id: uuid, booking_id: finalBookingId, user_email: finalUserEmail, property_name: finalPropName } 
+      message: 'Booking created successfully in PostgreSQL database!', 
+      booking: (result && result.rows && result.rows[0]) ? result.rows[0] : { id: primaryId, booking_id: finalBookingId, user_email: finalUserEmail, property_name: finalPropName } 
     });
   } catch (error) {
     console.error('Create booking error:', error);
@@ -227,7 +203,7 @@ router.post('/', async (req, res) => {
 
 /**
  * GET /api/bookings/user/:userEmail
- * Raw SQL query to fetch all bookings for a user by email or name
+ * Fetch all bookings for a user by email or name directly from PostgreSQL database
  */
 router.get('/user/:userEmail', async (req, res) => {
   const { userEmail } = req.params;
@@ -263,6 +239,7 @@ router.get('/host/:hostEmail', async (req, res) => {
   const { hostEmail } = req.params;
 
   try {
+    await ensureBookingsTable();
     const rawSql = `
       SELECT * FROM bookings
       WHERE LOWER(host_email) = LOWER($1) OR LOWER(user_email) = LOWER($1)
@@ -284,6 +261,7 @@ router.get('/host/:hostEmail', async (req, res) => {
  */
 router.get('/all', async (req, res) => {
   try {
+    await ensureBookingsTable();
     const rawSql = `
       SELECT * FROM bookings
       ORDER BY created_at DESC;
@@ -309,11 +287,23 @@ router.put('/:id/status', async (req, res) => {
     return res.status(400).json({ success: false, message: 'Status is required.' });
   }
 
+  const cleanId = (id || '').trim();
+  const digitsOnly = cleanId.replace(/\D/g, '');
+
   try {
-    await query(
-      'UPDATE bookings SET status = $1 WHERE id = $2 OR booking_id = $2 OR payment_id = $2',
-      [status, id]
-    );
+    await ensureBookingsTable();
+    const rawSql = `
+      UPDATE bookings
+      SET status = $1
+      WHERE LOWER(id) = LOWER($2)
+         OR LOWER(booking_id) = LOWER($2)
+         OR LOWER(payment_id) = LOWER($2)
+         OR LOWER(REPLACE(id, 'sik-', '')) = LOWER(REPLACE($2, 'sik-', ''))
+         OR LOWER(REPLACE(booking_id, 'sik-', '')) = LOWER(REPLACE($2, 'sik-', ''))
+         OR ($3 <> '' AND (id LIKE '%' || $3 || '%' OR booking_id LIKE '%' || $3 || '%'))
+      RETURNING *;
+    `;
+    const updateResult = await query(rawSql, [status.toLowerCase().trim(), cleanId, digitsOnly]);
 
     // If status is updated to cancelled, check and auto-create cancellation records
     if (status === 'cancelled') {
@@ -363,7 +353,8 @@ router.put('/:id/status', async (req, res) => {
             await query(
               `INSERT INTO cancellations (
                 id, booking_id, user_email, user_name, property_name, check_in, check_out, paid_amount, refund_amount, refund_percentage, cancellation_reason, status, refund_status, created_at
-              ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'pending', NOW())`,
+              ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'pending', NOW())
+              ON CONFLICT (id) DO UPDATE SET status = EXCLUDED.status, refund_amount = EXCLUDED.refund_amount`,
               [
                 cncId,
                 bookingId,
@@ -386,10 +377,14 @@ router.put('/:id/status', async (req, res) => {
       }
     }
 
-    return res.json({ success: true, message: `Booking ${id} status updated to ${status}.` });
+    return res.json({
+      success: true,
+      message: `Booking status updated to ${status}`,
+      booking: updateResult?.rows?.[0] || null
+    });
   } catch (error) {
     console.error('Update booking status error:', error);
-    return res.json({ success: true, message: `Booking ${id} status set to ${status}.` });
+    return res.status(500).json({ success: false, message: error.message });
   }
 });
 
@@ -399,17 +394,13 @@ router.put('/:id/status', async (req, res) => {
  */
 router.delete('/:id', async (req, res) => {
   const { id } = req.params;
-  const cleanId = (id || '').trim();
-
   try {
-    await query(
-      'DELETE FROM bookings WHERE id = $1 OR booking_id = $1 OR payment_id = $1',
-      [cleanId]
-    );
-    return res.json({ success: true, message: `Booking ${cleanId} deleted successfully.` });
+    await ensureBookingsTable();
+    await query('DELETE FROM bookings WHERE id = $1 OR booking_id = $1', [id]);
+    return res.json({ success: true, message: `Booking ${id} deleted successfully.` });
   } catch (error) {
     console.error('Delete booking error:', error);
-    return res.status(500).json({ success: false, message: error.message || 'Database error' });
+    return res.status(500).json({ success: false, message: error.message });
   }
 });
 

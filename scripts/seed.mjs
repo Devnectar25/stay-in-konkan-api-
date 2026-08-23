@@ -4,8 +4,8 @@
 // Run: node seed.mjs
 // ============================================================
 
-const SUPABASE_URL = 'https://bqsczpvvqvcgztrlpwwj.supabase.co';
-const SERVICE_ROLE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJxc2N6cHZ2cXZjZ3p0cmxwd3dqIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4NjY4Mzg1NSwiZXhwIjoyMTAyMjU5ODU1fQ.TNG7GxbS2gZa5WsVZmS4u3UVowDsjLc5nkeJfd-e_to';
+const SUPABASE_URL = process.env.SUPABASE_URL || 'https://luggntcaytyyyedeytha.supabase.co';
+const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imx1Z2dudGNheXR5eXllZGV5dGhhIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4NzQwNDc1MCwiZXhwIjoyMTAyOTgwNzUwfQ.sS3XlFeYB47RYZwl0_JskrV82Z_LuO3BEjCR3eh67jk';
 
 const headers = {
   'Content-Type': 'application/json',

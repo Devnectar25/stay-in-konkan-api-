@@ -23,8 +23,8 @@ const poolConfig = connectionString
 
 export const pool = new Pool(poolConfig);
 
-const SUPABASE_URL = process.env.SUPABASE_URL || 'https://bqsczpvvqvcgztrlpwwj.supabase.co';
-const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJxc2N6cHZ2cXZjZ3p0cmxwd3dqIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4NjY4Mzg1NSwiZXhwIjoyMTAyMjU5ODU1fQ.TNG7GxbS2gZa5WsVZmS4u3UVowDsjLc5nkeJfd-e_to';
+const SUPABASE_URL = process.env.SUPABASE_URL || 'https://luggntcaytyyyedeytha.supabase.co';
+const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imx1Z2dudGNheXR5eXllZGV5dGhhIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4NzQwNDc1MCwiZXhwIjoyMTAyOTgwNzUwfQ.sS3XlFeYB47RYZwl0_JskrV82Z_LuO3BEjCR3eh67jk';
 
 export const userBankMap = new Map();
 
@@ -43,7 +43,7 @@ const detectTable = (text) => {
   const fromMatch = lower.match(/\bfrom\s+([a-z0-9_]+)/);
   if (fromMatch && fromMatch[1]) {
     const mainTable = fromMatch[1].trim();
-    if (['hosts', 'host_accounts', 'properties', 'host_applications', 'users', 'bookings', 'contact_messages', 'newsletter_subscribers', 'cancellations', 'cancel_bookings', 'subadmins', 'reviews', 'wishlists', 'coupons', 'help_desk', 'helpdesk', 'issue', 'application_errors', 'platform_config'].includes(mainTable)) {
+    if (['hosts', 'host_accounts', 'properties', 'host_applications', 'users', 'bookings', 'contact_messages', 'newsletter_subscribers', 'cancellations', 'subadmins', 'reviews', 'wishlists', 'coupons', 'help_desk', 'helpdesk', 'issue', 'application_errors', 'platform_config'].includes(mainTable)) {
       return mainTable;
     }
   }
@@ -57,7 +57,6 @@ const detectTable = (text) => {
   if (lower.includes('issue')) return 'help_desk';
   if (lower.includes('coupons')) return 'coupons';
   if (lower.includes('subadmins')) return 'subadmins';
-  if (lower.includes('cancel_bookings')) return 'cancel_bookings';
   if (lower.includes('bookings')) return 'bookings';
   if (lower.includes('properties')) return 'properties';
   if (lower.includes('host_applications')) return 'host_applications';
@@ -71,73 +70,53 @@ const detectTable = (text) => {
 };
 
 export const query = async (text, params = []) => {
+  const lower = text.toLowerCase().trim();
   try {
     const res = await pool.query(text, params);
-    // If pg pool query succeeds, return PostgreSQL result directly (eliminates redundant CDN / Supabase REST calls)
-    if (res) {
-      return res;
-    }
+    return res;
   } catch (err) {
-    const lower = text.toLowerCase().trim();
     if (lower.includes('count(') || lower.includes('sum(') || lower.includes('group by')) {
       throw err;
     }
-    const tableName = detectTable(text);
+  }
 
-    if (tableName) {
-      const headers = {
-        'apikey': SUPABASE_KEY,
-        'Authorization': `Bearer ${SUPABASE_KEY}`,
-        'Content-Type': 'application/json',
-        'Prefer': 'return=representation'
-      };
+  const tableName = detectTable(text);
 
-      try {
-        // 1. SELECT Query Fallback with Parameter Filtering
-        if (lower.startsWith('select')) {
-          // In-memory properties JOIN users fallback
-          if (lower.includes('join') && tableName === 'properties') {
-            const propsRes = await fetch(`${SUPABASE_URL}/rest/v1/properties?select=id,name,title,host,host_email,host_phone,location,price,type,status,description,rating,reviews_count,image,image_url,facility1_image,facility2_image,facility3_image,rooms,created_at`, { headers });
-            const usersRes = await fetch(`${SUPABASE_URL}/rest/v1/users?select=id,full_name,email`, { headers });
-            if (propsRes.ok && usersRes.ok) {
-              const props = await propsRes.json();
-              const users = await usersRes.json();
-              let joined = props.map(p => {
-                const user = users.find(u => (u.email || '').toLowerCase().trim() === (p.host_email || '').toLowerCase().trim());
-                return {
-                  ...p,
-                  owner_name: user ? user.full_name : (p.host || 'Registered Host'),
-                  owner_email: user ? user.email : (p.host_email || '')
-                };
-              });
+  if (tableName) {
+    const headers = {
+      'apikey': SUPABASE_KEY,
+      'Authorization': `Bearer ${SUPABASE_KEY}`,
+      'Content-Type': 'application/json',
+      'Prefer': 'return=representation'
+    };
 
-              const statusMatch = lower.match(/status\s*=\s*\$(\d+)/);
-              if (statusMatch && statusMatch[1]) {
-                const statusIdx = parseInt(statusMatch[1], 10) - 1;
-                const statusVal = params[statusIdx];
-                if (statusVal && statusVal !== 'all') {
-                  joined = joined.filter(r => String(r.status).toLowerCase().trim() === String(statusVal).toLowerCase().trim());
-                }
+    try {
+      // 1. SELECT Query Fallback with Parameter Filtering
+      if (lower.startsWith('select')) {
+        // In-memory properties JOIN users fallback
+        if (lower.includes('join') && tableName === 'properties') {
+          const propsRes = await fetch(`${SUPABASE_URL}/rest/v1/properties?select=id,name,title,host,host_email,host_phone,location,price,type,status,description,rating,reviews_count,image,image_url,facility1_image,facility2_image,facility3_image,rooms,created_at`, { headers });
+          const usersRes = await fetch(`${SUPABASE_URL}/rest/v1/users?select=id,full_name,email`, { headers });
+          if (propsRes.ok && usersRes.ok) {
+            const props = await propsRes.json();
+            const users = await usersRes.json();
+            let joined = props.map(p => {
+              const user = users.find(u => (u.email || '').toLowerCase().trim() === (p.host_email || '').toLowerCase().trim());
+              return {
+                ...p,
+                owner_name: user ? user.full_name : (p.host || 'Registered Host'),
+                owner_email: user ? user.email : (p.host_email || '')
+              };
+            });
+
+            const statusMatch = lower.match(/status\s*=\s*\$(\d+)/);
+            if (statusMatch && statusMatch[1]) {
+              const statusIdx = parseInt(statusMatch[1], 10) - 1;
+              const statusVal = params[statusIdx];
+              if (statusVal && statusVal !== 'all') {
+                joined = joined.filter(r => String(r.status).toLowerCase().trim() === String(statusVal).toLowerCase().trim());
               }
-
-              return { rows: joined, rowCount: joined.length };
             }
-          }
-
-          let selectCols = '*';
-          const match = text.match(/select\s+(.+?)\s+from/i);
-          if (match && match[1]) {
-            const cols = match[1].split(',').map(c => c.trim().split(/\s+/).pop());
-            const validCols = cols.filter(c => c && c !== '*' && !c.includes('('));
-            if (validCols.length > 0) {
-              selectCols = validCols.join(',');
-            }
-          }
-          if (selectCols === '*' && tableName === 'users') {
-            selectCols = 'id,full_name,email,avatar_url,phone,role,provider,verified,created_at';
-          } else if (selectCols === '*' && tableName === 'properties') {
-            selectCols = 'id,name,title,host,host_email,host_phone,location,price,type,status,description,rating,reviews_count,image,image_url,facility1_image,facility2_image,facility3_image,rooms,created_at';
-          }
 
           // Build REST URL with optional filters for properties status
           let restUrl = `${SUPABASE_URL}/rest/v1/${tableName}?select=${selectCols}`;
@@ -167,6 +146,33 @@ export const query = async (text, params = []) => {
           if (!restRes.ok) {
             restRes = await fetch(`${SUPABASE_URL}/rest/v1/${tableName}?select=*`, { headers });
           }
+        }
+        if (selectCols === '*' && tableName === 'users') {
+          selectCols = 'id,full_name,email,avatar_url,phone,role,provider,verified,created_at';
+        } else if (selectCols === '*' && tableName === 'properties') {
+          selectCols = 'id,name,title,host,host_email,host_phone,location,price,type,status,description,rating,reviews_count,image,image_url,facility1_image,facility2_image,facility3_image,rooms,created_at,is_featured,show_on_home_screen,featured';
+        }
+
+        let sortField = 'created_at';
+        if (tableName === 'newsletter_subscribers') {
+          sortField = 'subscribed_at';
+        }
+
+        // Build REST URL with optional filters for properties status
+        let restUrl = `${SUPABASE_URL}/rest/v1/${tableName}?select=${selectCols}`;
+        if (tableName === 'properties' && lower.includes("!= 'rejected'")) {
+          restUrl += `&status=neq.rejected`;
+        }
+        if (lower.includes('order by')) {
+          restUrl += `&order=${sortField}.desc`;
+        }
+        let restRes = await fetch(restUrl, { headers });
+        if (!restRes.ok && selectCols !== '*') {
+          restRes = await fetch(`${SUPABASE_URL}/rest/v1/${tableName}?select=*${lower.includes('desc') ? `&order=${sortField}.desc` : ''}`, { headers });
+        }
+        if (!restRes.ok) {
+          restRes = await fetch(`${SUPABASE_URL}/rest/v1/${tableName}?select=*`, { headers });
+        }
           if (restRes.ok) {
             let rows = await restRes.json();
 
@@ -538,12 +544,21 @@ export const query = async (text, params = []) => {
             // Simple status update
             let status = 'live';
             params.forEach(p => {
-              if (p === 'live' || p === 'pending' || p === 'rejected') status = p;
-              else if (typeof p === 'string' && (p.startsWith('prop-') || p.includes('-') || p.length > 2)) id = p;
+              const val = String(p || '').toLowerCase().trim();
+              if (['live', 'pending', 'rejected', 'inactive', 'paused', 'disabled', 'active'].includes(val)) {
+                status = val;
+              } else if (typeof p === 'string' && (p.startsWith('prop-') || p.includes('-') || p.length > 2)) {
+                id = p;
+              }
             });
 
             if (!id && params.length > 1) id = params[1] || params[0];
-            if (params.length > 0 && (params[0] === 'live' || params[0] === 'pending' || params[0] === 'rejected')) status = params[0];
+            if (params.length > 0) {
+              const p0 = String(params[0] || '').toLowerCase().trim();
+              if (['live', 'pending', 'rejected', 'inactive', 'paused', 'disabled', 'active'].includes(p0)) {
+                status = p0;
+              }
+            }
 
             updateBody = { status: status.toLowerCase() };
           }
@@ -742,8 +757,8 @@ export const query = async (text, params = []) => {
           }
         }
 
-        // 4.5 INSERT Cancellations & Cancel Bookings Fallback
-        if (lower.startsWith('insert into cancel_bookings') || lower.startsWith('insert into cancellations')) {
+        // 4.5 INSERT Cancellations Fallback
+        if (lower.startsWith('insert into cancellations')) {
           const body = {
             id: params[0] || undefined,
             booking_id: params[1] || undefined,
@@ -760,8 +775,7 @@ export const query = async (text, params = []) => {
             status: params[12] || 'pending',
             refund_status: 'pending'
           };
-          const targetEndpoint = lower.includes('cancel_bookings') ? 'cancel_bookings' : 'cancellations';
-          const restRes = await fetch(`${SUPABASE_URL}/rest/v1/${targetEndpoint}`, {
+          const restRes = await fetch(`${SUPABASE_URL}/rest/v1/cancellations`, {
             method: 'POST',
             headers,
             body: JSON.stringify(body)
@@ -1428,9 +1442,9 @@ export const query = async (text, params = []) => {
           }
         }
 
-        // 10.4 UPDATE Cancellations / Cancel Bookings Fallback
-        if (lower.startsWith('update cancellations') || lower.startsWith('update cancel_bookings')) {
-          const targetTable = lower.includes('cancel_bookings') ? 'cancel_bookings' : 'cancellations';
+        // 10.4 UPDATE Cancellations Fallback
+        if (lower.startsWith('update cancellations')) {
+          const targetTable = 'cancellations';
           let updateBody = {};
           let cancId = params[params.length - 1];
 
@@ -2041,6 +2055,8 @@ export const query = async (text, params = []) => {
 
     return { rows: [], rowCount: 0 };
   }
+
+  return { rows: [], rowCount: 0 };
 };
 
 pool.on('error', (err) => {

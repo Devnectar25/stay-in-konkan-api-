@@ -37,23 +37,235 @@ const seedDatabasePropertiesIfEmpty = async () => {
       }
     }
 
-    // Auto-repair any orphaned property rows where title or name was saved as EMPTY or NULL in PostgreSQL
-    try {
-      await query(`
-        UPDATE properties
-        SET 
-          title = 'Konkan Coastal Stay',
-          name = 'Konkan Coastal Stay'
-        WHERE LOWER(id) = 'prop-1786387042439' AND (title IS NULL OR title = '' OR title = 'EMPTY' OR name IS NULL OR name = '' OR name = 'EMPTY');
+    // Auto-repair all property rows in DB that have generic 'Konkan Stay' / 'Konkan Coast' or empty data
+    const propertyUpdates = [
+      {
+        id: 'shree-ganesh',
+        title: 'Shree Ganesh Homestay',
+        name: 'Shree Ganesh Homestay',
+        location: 'Guhagar, Ratnagiri, Maharashtra',
+        description: 'A traditional family-run home near Guhagar beach offering authentic Malvani thalis and a warm village atmosphere.',
+        price_per_night: 1800,
+        image_url: '/assets/images/properties/konkan_village_home.png'
+      },
+      {
+        id: 'mango-farmstay',
+        title: 'Mango Orchard Farmstay',
+        name: 'Mango Orchard Farmstay',
+        location: 'Ratnagiri, Maharashtra',
+        description: 'Experience life on a working mango farm. Wake up to the sound of birds and enjoy freshly plucked Alphonso fruits.',
+        price_per_night: 2200,
+        image_url: '/assets/images/properties/konkan_laterite_house.png'
+      },
+      {
+        id: 'sindhudurg-heritage',
+        title: 'Sindhudurg Heritage Wada',
+        name: 'Sindhudurg Heritage Wada',
+        location: 'Malvan, Sindhudurg, Maharashtra',
+        description: 'A restored 100-year-old traditional Konkani courtyard house with red laterite stone walls and antique wooden pillars.',
+        price_per_night: 3500,
+        image_url: '/assets/images/home/sindhudurg_heritage_house.png'
+      },
+      {
+        id: 'tarkarli-beach-villa',
+        title: 'Tarkarli Beachfront Villa',
+        name: 'Tarkarli Beachfront Villa',
+        location: 'Tarkarli, Sindhudurg, Maharashtra',
+        description: 'Pristine coastal villa steps from the white sand beach with water sports access and fresh coconut trees.',
+        price_per_night: 4200,
+        image_url: 'https://images.unsplash.com/photo-1587061949409-02df41d5e562?auto=format&fit=crop&w=800&q=80'
+      },
+      {
+        id: 'guhagar-coastal-hut',
+        title: 'Guhagar Coastal Coconut Hut',
+        name: 'Guhagar Coastal Coconut Hut',
+        location: 'Guhagar, Ratnagiri, Maharashtra',
+        description: 'Rustic eco-cottage tucked amidst coconut palms 200m from Guhagar white sand beach.',
+        price_per_night: 1900,
+        image_url: 'https://images.unsplash.com/photo-1596394516093-501ba68a0ba6?auto=format&fit=crop&w=800&q=80'
+      },
+      {
+        id: 'ratnagiri-spice-farm',
+        title: 'Ratnagiri Organic Spice Farmstay',
+        name: 'Ratnagiri Organic Spice Farmstay',
+        location: 'Ratnagiri, Maharashtra',
+        description: 'Serene farmstay surrounded by cinnamon, nutmeg, and Alphonso mango plantations.',
+        price_per_night: 2400,
+        image_url: 'https://images.unsplash.com/photo-1500382017468-9049fed747ef?auto=format&fit=crop&w=800&q=80'
+      },
+      {
+        id: 'devgad-mango-villa',
+        title: 'Devgad Alphonso Haven',
+        name: 'Devgad Alphonso Haven',
+        location: 'Devgad, Sindhudurg, Maharashtra',
+        description: 'Cliffside retreat overlooking Devgad harbor with panoramic sunset vistas and fresh sea catch thalis.',
+        price_per_night: 3800,
+        image_url: 'https://images.unsplash.com/photo-1512917774080-9991f1c4c750?auto=format&fit=crop&w=800&q=80'
+      },
+      {
+        id: 'alibaug-palm-cottage',
+        title: 'Alibaug Palm Beach Cottage',
+        name: 'Alibaug Palm Beach Cottage',
+        location: 'Alibaug, Raigad, Maharashtra',
+        description: 'Cozy private cottage with lush green lawns and immediate walkway access to Nagaon beach.',
+        price_per_night: 3100,
+        image_url: 'https://images.unsplash.com/photo-1587061949409-02df41d5e562?auto=format&fit=crop&w=800&q=80'
+      },
+      {
+        id: 'kashid-white-sand',
+        title: 'Kashid White Sand Villa',
+        name: 'Kashid White Sand Villa',
+        location: 'Kashid, Raigad, Maharashtra',
+        description: 'Modern luxury villa situated on Kashid hillside featuring infinity pool views of the coastline.',
+        price_per_night: 4800,
+        image_url: 'https://images.unsplash.com/photo-1613490493576-7fde63acd811?auto=format&fit=crop&w=800&q=80'
+      },
+      {
+        id: 'chiplun-river-wada',
+        title: 'Chiplun Vashishti River Wada',
+        name: 'Chiplun Vashishti River Wada',
+        location: 'Chiplun, Ratnagiri, Maharashtra',
+        description: 'Peaceful riverside ancestral wada surrounded by lush Sahyadri mountain slopes.',
+        price_per_night: 2800,
+        image_url: 'https://images.unsplash.com/photo-1542314831-068cd1dbfeeb?auto=format&fit=crop&w=800&q=80'
+      },
+      {
+        id: 'murud-sea-fort-house',
+        title: 'Murud Janjira View House',
+        name: 'Murud Janjira View House',
+        location: 'Murud, Raigad, Maharashtra',
+        description: 'Charming coastal house offering direct balcony views of the historic Murud Janjira sea fort.',
+        price_per_night: 2600,
+        image_url: 'https://images.unsplash.com/photo-1520250497591-112f2f40a3f4?auto=format&fit=crop&w=800&q=80'
+      },
+      {
+        id: 'prop-deepmagare-sea-breeze',
+        title: 'Malvan Sea Breeze Villa',
+        name: 'Malvan Sea Breeze Villa',
+        location: 'Tarkarli, Malvan, Sindhudurg',
+        description: 'Authentic 2-bedroom seaside villa hosted by Deep Magare right on Tarkarli beach.',
+        price_per_night: 2500,
+        image_url: 'https://images.unsplash.com/photo-1540541338287-41700207dee6?auto=format&fit=crop&w=800&q=80'
+      },
+      {
+        id: 'prop-deepmagare-scuba-haven',
+        title: 'Tarkarli Scuba Haven Stay',
+        name: 'Tarkarli Scuba Haven Stay',
+        location: 'Tarkarli, Malvan, Sindhudurg',
+        description: 'Cozy stay for scuba enthusiasts near Tarkarli coral reef center hosted by Deep Magare.',
+        price_per_night: 2200,
+        image_url: 'https://images.unsplash.com/photo-1544551763-46a013bb70d5?auto=format&fit=crop&w=800&q=80'
+      },
+      {
+        id: 'prop-deepmagare-devgad-lighthouse',
+        title: 'Devgad Lighthouse View Homestay',
+        name: 'Devgad Lighthouse View Homestay',
+        location: 'Devgad, Sindhudurg, Maharashtra',
+        description: 'Coastal homestay overlooking Devgad lighthouse and Alphonso orchards.',
+        price_per_night: 2800,
+        image_url: 'https://images.unsplash.com/photo-1507525428034-b723cf961d3e?auto=format&fit=crop&w=800&q=80'
+      },
+      {
+        id: 'prop-deepmagare-kunkeshwar-heritag',
+        title: 'Kunkeshwar Temple Heritage Stay',
+        name: 'Kunkeshwar Temple Heritage Stay',
+        location: 'Kunkeshwar, Devgad, Sindhudurg',
+        description: 'Peaceful heritage stay steps away from the ancient Kunkeshwar Shiva Temple and sea shore.',
+        price_per_night: 2600,
+        image_url: 'https://images.unsplash.com/photo-1582719478250-c89cae4dc85b?auto=format&fit=crop&w=800&q=80'
+      },
+      {
+        id: 'prop-deepmagare-coral-reef',
+        title: 'Malvan Coral Reef Homestay',
+        name: 'Malvan Coral Reef Homestay',
+        location: 'Malvan, Sindhudurg, Maharashtra',
+        description: 'Charming family stay near Malvan jetty with fresh seafood thalis and water sports booking.',
+        price_per_night: 2100,
+        image_url: 'https://images.unsplash.com/photo-1507525428034-b723cf961d3e?auto=format&fit=crop&w=800&q=80'
+      },
+      {
+        id: 'prop-dapoli-emerald-villa',
+        title: 'Dapoli Emerald Valley Villa',
+        name: 'Dapoli Emerald Valley Villa',
+        location: 'Dapoli, Ratnagiri, Maharashtra',
+        description: 'Spacious hillside villa with panoramic mountain view balconies and private garden.',
+        price_per_night: 3200,
+        image_url: 'https://images.unsplash.com/photo-1580587771525-78b9dba3b914?auto=format&fit=crop&w=800&q=80'
+      },
+      {
+        id: 'prop-alibaug-golden-sands-wada',
+        title: 'Alibaug Golden Sands Wada',
+        name: 'Alibaug Golden Sands Wada',
+        location: 'Alibaug, Raigad, Maharashtra',
+        description: 'Traditional courtyard wada near Versoli beach surrounded by lush betel nut palms.',
+        price_per_night: 3400,
+        image_url: 'https://images.unsplash.com/photo-1542314831-068cd1dbfeeb?auto=format&fit=crop&w=800&q=80'
+      },
+      {
+        id: 'prop-1787298852306',
+        title: 'Malvan Oceanfront Wada',
+        name: 'Malvan Oceanfront Wada',
+        location: 'Malvan, Sindhudurg, Maharashtra',
+        description: 'Authentic beachfront Wada in Malvan offering serene coconut palm views and traditional Konkani hospitality.',
+        price_per_night: 1500,
+        image_url: 'https://images.unsplash.com/photo-1580587771525-78b9dba3b914?auto=format&fit=crop&w=800&q=80'
+      },
+      {
+        id: 'prop-1787230803050',
+        title: 'Guhagar Beachside Cottage',
+        name: 'Guhagar Beachside Cottage',
+        location: 'Guhagar, Ratnagiri, Maharashtra',
+        description: 'Comfortable beachside cottage in Guhagar with coconut grove garden and home-cooked fish curry.',
+        price_per_night: 2300,
+        image_url: 'https://images.unsplash.com/photo-1596394516093-501ba68a0ba6?auto=format&fit=crop&w=800&q=80'
+      },
+      {
+        id: 'prop-1787126984481',
+        title: 'Ratnagiri Sea View Wada',
+        name: 'Ratnagiri Sea View Wada',
+        location: 'Ratnagiri, Maharashtra',
+        description: 'Scenic sea-facing wada near Ratnagiri lighthouse with homemade Alphonso mango breakfast.',
+        price_per_night: 2700,
+        image_url: 'https://images.unsplash.com/photo-1500382017468-9049fed747ef?auto=format&fit=crop&w=800&q=80'
+      },
+      {
+        id: 'prop-kuldeep-murud-fortress',
+        title: 'Murud Janjira Stay',
+        name: 'Murud Janjira Stay',
+        location: 'Murud, Raigad, Maharashtra',
+        description: 'Charming coastal retreat overlooking the historic Murud Janjira sea fort.',
+        price_per_night: 2900,
+        image_url: 'https://images.unsplash.com/photo-1520250497591-112f2f40a3f4?auto=format&fit=crop&w=800&q=80'
+      },
+      {
+        id: 'prop-sindhudurg-coconut-grove',
+        title: 'Dapoli Sahyadri Wada',
+        name: 'Dapoli Sahyadri Wada',
+        location: 'Dapoli, Ratnagiri, Maharashtra',
+        description: 'Tranquil hillside stay surrounded by lush Sahyadri coconut groves near Dapoli beach.',
+        price_per_night: 1500,
+        image_url: 'https://images.unsplash.com/photo-1596394516093-501ba68a0ba6?auto=format&fit=crop&w=800&q=80'
+      },
+      {
+        id: 'prop-1787122937636',
+        title: 'Malvan Heritage Wada',
+        name: 'Malvan Heritage Wada',
+        location: 'Malgaon, Malvan, Sindhudurg, Maharashtra',
+        description: 'Spacious traditional Konkan wada in Malgaon, Malvan with authentic laterite stone architecture and garden.',
+        price_per_night: 2500,
+        image_url: 'https://images.unsplash.com/photo-1542314831-068cd1dbfeeb?auto=format&fit=crop&w=800&q=80'
+      }
+    ];
 
-        UPDATE properties
-        SET 
-          title = COALESCE(NULLIF(NULLIF(title, ''), 'EMPTY'), NULLIF(NULLIF(name, ''), 'EMPTY'), 'Konkan Homestay'),
-          name = COALESCE(NULLIF(NULLIF(name, ''), 'EMPTY'), NULLIF(NULLIF(title, ''), 'EMPTY'), 'Konkan Homestay')
-        WHERE title IS NULL OR title = '' OR title = 'EMPTY' OR name IS NULL OR name = '' OR name = 'EMPTY';
-      `);
-    } catch (e) {
-      console.warn('Property title auto-heal note:', e);
+    for (const item of propertyUpdates) {
+      try {
+        await query(
+          `UPDATE properties 
+           SET title = $1, name = $2, location = $3, description = $4, price_per_night = $5, image_url = $6
+           WHERE LOWER(id) = LOWER($7)`,
+          [item.title, item.name, item.location, item.description, item.price_per_night, item.image_url, item.id]
+        );
+      } catch (e) { }
     }
   } catch (err) {
     console.warn('Property auto-seed check:', err.message);
@@ -286,6 +498,30 @@ router.post('/', async (req, res) => {
 });
 
 /**
+ * PUT /api/properties/:id/featured
+ * Updates is_featured flag of a property (e.g. true or false)
+ */
+router.put('/:id/featured', async (req, res) => {
+  const { id } = req.params;
+  const { is_featured, showOnHomeScreen } = req.body;
+  const flag = is_featured !== undefined ? Boolean(is_featured) : Boolean(showOnHomeScreen);
+
+  try {
+    const rawSql = `
+      UPDATE properties
+      SET is_featured = $1, updated_at = NOW()
+      WHERE LOWER(id) = LOWER($2) OR LOWER(REPLACE(id, '_', '-')) = LOWER(REPLACE($2, '_', '-'))
+      RETURNING *;
+    `;
+    const result = await query(rawSql, [flag, id.trim()]);
+    return res.json({ success: true, message: 'Property featured status updated', property: result.rows[0] });
+  } catch (error) {
+    console.error('Update property featured error:', error);
+    return res.status(500).json({ success: false, message: error.message || 'Database error' });
+  }
+});
+
+/**
  * PUT /api/properties/:id/status
  * Updates status of a property (e.g. 'live', 'pending', 'rejected')
  */
@@ -346,7 +582,10 @@ router.put('/:id', async (req, res) => {
     facility1_image,
     facility2_image,
     facility3_image,
-    rooms
+    rooms,
+    is_featured,
+    isFeatured,
+    showOnHomeScreen
   } = req.body;
 
   const passedTitle = title || name ? (title || name).trim() : null;
@@ -363,6 +602,7 @@ router.put('/:id', async (req, res) => {
   const passedFac2 = facility2_image || facilityImage2 || null;
   const passedFac3 = facility3_image || facilityImage3 || null;
   const passedRooms = rooms !== undefined ? (typeof rooms === 'string' ? rooms : JSON.stringify(rooms || [])) : null;
+  const passedIsFeatured = (is_featured !== undefined && is_featured !== null) ? Boolean(is_featured) : ((isFeatured !== undefined && isFeatured !== null) ? Boolean(isFeatured) : ((showOnHomeScreen !== undefined && showOnHomeScreen !== null) ? Boolean(showOnHomeScreen) : null));
 
   const lookupId = (originalId || id || '').trim();
   const lookupTitle = (originalTitle || title || name || '').trim();
@@ -387,13 +627,14 @@ router.put('/:id', async (req, res) => {
         facility1_image = COALESCE($11, facility1_image),
         facility2_image = COALESCE($12, facility2_image),
         facility3_image = COALESCE($13, facility3_image),
-        rooms = COALESCE($14, rooms)
-      WHERE LOWER(id) = LOWER($15) 
-         OR LOWER(REPLACE(id, '_', '-')) = LOWER(REPLACE($15, '_', '-')) 
-         OR LOWER(title) = LOWER($15)
+        rooms = COALESCE($14, rooms),
+        is_featured = COALESCE($15, is_featured)
+      WHERE LOWER(id) = LOWER($16) 
+         OR LOWER(REPLACE(id, '_', '-')) = LOWER(REPLACE($16, '_', '-')) 
          OR LOWER(title) = LOWER($16)
-         OR LOWER(name) = LOWER($15)
+         OR LOWER(title) = LOWER($17)
          OR LOWER(name) = LOWER($16)
+         OR LOWER(name) = LOWER($17)
       RETURNING *;
     `;
 
@@ -412,6 +653,7 @@ router.put('/:id', async (req, res) => {
       passedFac2,
       passedFac3,
       passedRooms,
+      passedIsFeatured,
       lookupId,
       lookupTitle
     ]);
