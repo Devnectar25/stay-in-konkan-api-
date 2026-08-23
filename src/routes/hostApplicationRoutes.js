@@ -1,8 +1,14 @@
 import express from 'express';
 import crypto from 'crypto';
+import dotenv from 'dotenv';
 import { query } from '../db.js';
 
+dotenv.config();
+
 const router = express.Router();
+
+const SUPABASE_URL = process.env.SUPABASE_URL || 'https://luggntcaytyyyedeytha.supabase.co';
+const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imx1Z2dudGNheXR5eXllZGV5dGhhIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4NzQwNDc1MCwiZXhwIjoyMTAyOTgwNzUwfQ.sS3XlFeYB47RYZwl0_JskrV82Z_LuO3BEjCR3eh67jk';
 
 let isTableChecked = false;
 const ensureHostApplicationsTable = async () => {
@@ -23,24 +29,79 @@ const ensureHostApplicationsTable = async () => {
         property_doc_name VARCHAR(255),
         gst_doc_name VARCHAR(255),
         identity_doc_name VARCHAR(255),
+        property_doc_url TEXT,
+        gst_doc_url TEXT,
+        identity_doc_url TEXT,
         status VARCHAR(50) DEFAULT 'pending',
         created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
       );
     `);
+    try {
+      await query(`ALTER TABLE host_applications ADD COLUMN IF NOT EXISTS property_doc_url TEXT;`);
+      await query(`ALTER TABLE host_applications ADD COLUMN IF NOT EXISTS gst_doc_url TEXT;`);
+      await query(`ALTER TABLE host_applications ADD COLUMN IF NOT EXISTS identity_doc_url TEXT;`);
+    } catch (e) {}
   } catch (err) {
     console.warn('Host applications table init check:', err.message);
   }
 };
 
 /**
+ * Upload document base64 data to Supabase Storage Bucket [host-applications]
+ */
+async function uploadDocToBucket(fileData, origName) {
+  if (!fileData || typeof fileData !== 'string' || !fileData.trim()) return null;
+  if (fileData.startsWith('http://') || fileData.startsWith('https://')) return fileData;
+
+  try {
+    let contentType = 'application/pdf';
+    let base64Payload = fileData;
+    if (fileData.startsWith('data:')) {
+      const parts = fileData.split(';base64,');
+      if (parts.length === 2) {
+        contentType = parts[0].replace('data:', '');
+        base64Payload = parts[1];
+      }
+    }
+
+    const ext = origName && origName.includes('.') ? origName.split('.').pop() : (contentType.includes('pdf') ? 'pdf' : contentType.includes('png') ? 'png' : 'jpg');
+    const cleanName = (origName || 'doc').replace(/[^a-zA-Z0-9_-]/g, '_').substring(0, 40);
+    const uniqueFileName = `host_doc_${Date.now()}_${cleanName}.${ext}`;
+    const fileBuffer = Buffer.from(base64Payload, 'base64');
+
+    const uploadEndpoint = `${SUPABASE_URL}/storage/v1/object/host-applications/${uniqueFileName}`;
+    const uploadRes = await fetch(uploadEndpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': contentType,
+        'Authorization': `Bearer ${SERVICE_KEY}`,
+        'apikey': SERVICE_KEY,
+        'x-upsert': 'true'
+      },
+      body: fileBuffer
+    });
+
+    const publicUrl = `${SUPABASE_URL}/storage/v1/object/public/host-applications/${uniqueFileName}`;
+    return publicUrl;
+  } catch (err) {
+    console.warn('[HostApp Upload Error]:', err.message);
+    return null;
+  }
+}
+
+/**
  * POST /api/host-applications
  * Inserts a new host application into host_applications table in PostgreSQL
+ * and uploads attached documents to Supabase Storage Bucket [host-applications]
  */
 router.post('/', async (req, res) => {
   const { 
     name, email, phone, location, propertyType, description, 
     propertyName, propertyTitle, custom_property_name, customPropertyName,
-    propertyDocName, gstDocName, idProofDocName, status 
+    propertyDocName, gstDocName, idProofDocName, identityDocName,
+    propertyDocUrl, gstDocUrl, identityDocUrl, idProofDocUrl,
+    propertyDocData, gstDocData, idProofDocData, identityDocData,
+    status 
   } = req.body;
 
   if (!name || !email || !location) {
@@ -54,14 +115,19 @@ router.post('/', async (req, res) => {
   const cleanEmail = email.trim().toLowerCase();
   const propName = (propertyName || propertyTitle || custom_property_name || customPropertyName || `${name}'s Homestay`).trim();
 
+  // Process & Upload attached document files to Supabase Storage Bucket [host-applications]
+  const finalPropDocUrl = propertyDocUrl || await uploadDocToBucket(propertyDocData, propertyDocName || '712_extract.pdf');
+  const finalGstDocUrl = gstDocUrl || await uploadDocToBucket(gstDocData, gstDocName || 'gst_cert.pdf');
+  const finalIdentityDocUrl = identityDocUrl || idProofDocUrl || await uploadDocToBucket(idProofDocData || identityDocData, idProofDocName || identityDocName || 'aadhaar.pdf');
+
   try {
     const rawSql = `
       INSERT INTO host_applications (
         id, application_id, applicant_name, applicant_email, phone, location, 
         property_type, description, custom_property_name, property_doc_name, 
-        gst_doc_name, identity_doc_name, status, created_at
+        gst_doc_name, identity_doc_name, property_doc_url, gst_doc_url, identity_doc_url, status, created_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW())
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, NOW())
       ON CONFLICT (id) DO UPDATE SET
         applicant_name = EXCLUDED.applicant_name,
         applicant_email = EXCLUDED.applicant_email,
@@ -70,6 +136,9 @@ router.post('/', async (req, res) => {
         property_type = EXCLUDED.property_type,
         description = EXCLUDED.description,
         custom_property_name = EXCLUDED.custom_property_name,
+        property_doc_url = COALESCE(EXCLUDED.property_doc_url, host_applications.property_doc_url),
+        gst_doc_url = COALESCE(EXCLUDED.gst_doc_url, host_applications.gst_doc_url),
+        identity_doc_url = COALESCE(EXCLUDED.identity_doc_url, host_applications.identity_doc_url),
         status = EXCLUDED.status
       RETURNING *;
     `;
@@ -86,18 +155,18 @@ router.post('/', async (req, res) => {
       propName,
       propertyDocName || null,
       gstDocName || null,
-      idProofDocName || null,
+      idProofDocName || identityDocName || null,
+      finalPropDocUrl || null,
+      finalGstDocUrl || null,
+      finalIdentityDocUrl || null,
       status || 'pending'
     ];
 
     const result = await query(rawSql, params);
 
-    // Do not auto-insert pending property into properties table upon host registration application.
-    // Properties should only be created/listed explicitly by approved hosts.
-
     return res.json({
       success: true,
-      message: 'Host application submitted successfully to database!',
+      message: 'Host application and documents submitted successfully to database & Supabase bucket!',
       application: result.rows[0]
     });
   } catch (error) {
@@ -108,160 +177,100 @@ router.post('/', async (req, res) => {
 
 /**
  * GET /api/host-applications
- * Fetches all host applications for admin dashboard
+ * Fetch all host applications from database
  */
 router.get('/', async (req, res) => {
   try {
     await ensureHostApplicationsTable();
-    const result = await query("SELECT * FROM host_applications WHERE LOWER(status) = 'pending' OR status IS NULL ORDER BY created_at DESC");
-    return res.json({ success: true, count: result.rowCount, applications: result.rows });
+    const result = await query('SELECT * FROM host_applications ORDER BY created_at DESC');
+    return res.json({
+      success: true,
+      count: result.rows.length,
+      applications: result.rows,
+      data: result.rows
+    });
   } catch (error) {
     console.error('Fetch host applications error:', error);
-    return res.json({ success: true, count: 0, applications: [] });
+    return res.status(500).json({ success: false, message: error.message });
+  }
+});
+
+/**
+ * GET /api/host-applications/user/:email
+ * Fetch host application for a specific user email
+ */
+router.get('/user/:email', async (req, res) => {
+  const { email } = req.params;
+  try {
+    await ensureHostApplicationsTable();
+    const result = await query('SELECT * FROM host_applications WHERE LOWER(applicant_email) = LOWER($1) ORDER BY created_at DESC LIMIT 1', [email]);
+    return res.json({
+      success: true,
+      application: result.rows[0] || null
+    });
+  } catch (error) {
+    console.error('Fetch user host application error:', error);
+    return res.status(500).json({ success: false, message: error.message });
   }
 });
 
 /**
  * PUT /api/host-applications/:id/status
- * Updates host application status (approved / rejected)
+ * Update status of a host application (approved / rejected / pending)
  */
 router.put('/:id/status', async (req, res) => {
-  let rawId = req.params.id || '';
-  try {
-    rawId = decodeURIComponent(rawId);
-  } catch (e) {}
+  const { id } = req.params;
+  const { status } = req.body;
 
-  const { status, email } = req.body;
-  let targetEmail = (email || (typeof rawId === 'string' && rawId.includes('@') ? rawId : '')).toLowerCase().trim();
-  try {
-    targetEmail = decodeURIComponent(targetEmail);
-  } catch (e) {}
+  if (!status) {
+    return res.status(400).json({ success: false, message: 'Status is required.' });
+  }
 
   try {
     await ensureHostApplicationsTable();
-
-    let app = null;
-    try {
-      const appRes = await query(
-        'SELECT * FROM host_applications WHERE id = $1 OR application_id = $1 OR ($2 != \'\' AND LOWER(applicant_email) = LOWER($2)) LIMIT 1',
-        [rawId, targetEmail]
-      );
-      if (appRes && appRes.rows && appRes.rows.length > 0) {
-        app = appRes.rows[0];
-      }
-    } catch (e) {}
-
-    const hostName = app?.applicant_name || app?.name || req.body.name || req.body.applicant_name || 'Verified Host';
-    const hostEmail = (app?.applicant_email || app?.email || targetEmail || req.body.email || rawId).toLowerCase().trim();
-    const hostPhone = app?.phone || req.body.phone || '';
-    const hostLocation = app?.location || req.body.location || 'Konkan, Maharashtra';
-    const hostId = hostEmail;
-
-    if (status === 'approved' && hostEmail) {
-      // 1. Insert/Upsert into hosts table with verified status
-      try {
-        await query(`
-          INSERT INTO hosts (
-            id, full_name, email, phone, location, total_properties, verified, status, created_at, updated_at
-          )
-          VALUES ($1, $2, $3, $4, $5, 1, true, 'verified', NOW(), NOW())
-          ON CONFLICT (email) DO UPDATE SET
-            id = EXCLUDED.id,
-            full_name = COALESCE(EXCLUDED.full_name, hosts.full_name),
-            phone = COALESCE(EXCLUDED.phone, hosts.phone),
-            location = COALESCE(EXCLUDED.location, hosts.location),
-            verified = true,
-            status = 'verified',
-            updated_at = NOW();
-        `, [hostId, hostName, hostEmail, hostPhone, hostLocation]);
-      } catch (err) {
-        console.error('Insert approved host error:', err.message);
-      }
-
-      // 2. Insert/Upsert into users table with role = 'host'
-      try {
-        await query(`
-          INSERT INTO users (id, full_name, email, role, verified, phone, updated_at)
-          VALUES ($1, $2, $3, $4, $5, $6, NOW())
-          ON CONFLICT (email) DO UPDATE SET
-            role = 'host',
-            verified = true,
-            full_name = COALESCE(EXCLUDED.full_name, users.full_name),
-            phone = COALESCE(EXCLUDED.phone, users.phone),
-            updated_at = NOW();
-        `, [hostId, hostName, hostEmail, 'host', true, hostPhone]);
-      } catch (err) {
-        console.error('Promote user to host error:', err.message);
-      }
-
-      // 3. Activate host properties
-      try {
-        await query(
-          "UPDATE properties SET status = 'live' WHERE LOWER(host_email) = LOWER($1) OR id = $2",
-          [hostEmail, rawId]
-        );
-      } catch (e) {}
-
-      // 4. Remove approved host application from host_applications table
-      try {
-        await query(
-          'DELETE FROM host_applications WHERE id = $1 OR application_id = $1 OR ($2 != \'\' AND LOWER(applicant_email) = LOWER($2))',
-          [rawId, hostEmail]
-        );
-      } catch (err) {
-        console.error('Delete approved host application error:', err.message);
-      }
-
-      return res.json({
-        success: true,
-        message: `Host ${hostName} approved and added to hosts table in database`,
-        host: { id: hostId, full_name: hostName, email: hostEmail, phone: hostPhone, location: hostLocation, status: 'verified' }
-      });
-    }
-
-    // For other statuses (e.g. rejected/pending)
     const result = await query(
-      `UPDATE host_applications 
-       SET status = $1 
-       WHERE id = $2 
-          OR application_id = $2 
-          OR ($3 != '' AND LOWER(applicant_email) = LOWER($3)) 
-       RETURNING *`,
-      [status || 'pending', rawId, targetEmail]
+      'UPDATE host_applications SET status = $1 WHERE id = $2 OR application_id = $2 RETURNING *',
+      [status, id]
     );
+
+    const appRecord = result.rows[0];
+
+    // If host application is approved, promote user role to 'host' in users table
+    if (status === 'approved' && appRecord && appRecord.applicant_email) {
+      try {
+        await query(
+          "UPDATE users SET role = 'host' WHERE LOWER(email) = LOWER($1)",
+          [appRecord.applicant_email]
+        );
+      } catch (uErr) {
+        console.warn('User role update note:', uErr.message);
+      }
+    }
 
     return res.json({
       success: true,
-      message: `Application status updated to ${status}`,
-      application: result?.rows?.[0] || null
+      message: `Host application status updated to ${status}`,
+      application: appRecord
     });
   } catch (error) {
     console.error('Update host application status error:', error);
-    return res.json({ success: true, message: `Application status updated to ${status}` });
+    return res.status(500).json({ success: false, message: error.message });
   }
 });
 
 /**
  * DELETE /api/host-applications/:id
- * Deletes a host application by ID, application_id, or email
+ * Delete a host application record from database
  */
 router.delete('/:id', async (req, res) => {
   const { id } = req.params;
-  const cleanId = (id || '').trim();
-  const cleanEmail = cleanId.toLowerCase();
-
   try {
     await ensureHostApplicationsTable();
-
-    await query(
-      'DELETE FROM host_applications WHERE id = $1 OR application_id = $1 OR LOWER(applicant_email) = LOWER($2)',
-      [cleanId, cleanEmail]
-    );
-
-    return res.json({ success: true, message: 'Host application deleted successfully' });
+    await query('DELETE FROM host_applications WHERE id = $1 OR application_id = $1', [id]);
+    return res.json({ success: true, message: `Host application ${id} deleted successfully.` });
   } catch (error) {
     console.error('Delete host application error:', error);
-    return res.json({ success: true, message: 'Host application deleted successfully' });
+    return res.status(500).json({ success: false, message: error.message });
   }
 });
 

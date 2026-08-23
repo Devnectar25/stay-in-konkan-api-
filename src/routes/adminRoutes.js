@@ -9,34 +9,10 @@ const router = express.Router();
 const normalizeBookingStatus = (b) => {
   if (!b) return b;
   const status = String(b.status || 'confirmed').toLowerCase().trim();
-  const isCancelledOrRejected = [
-    'cancelled',
-    'cancelled_by_guest',
-    'cancelled_by_host',
-    'cancellation_pending',
-    'cancellation_requested',
-    'rejected',
-    'declined',
-    'refunded'
-  ].includes(status);
-
-  if (isCancelledOrRejected) {
-    return b;
-  }
-
-  const checkOutStr = b.check_out || b.checkOut;
-  if (checkOutStr) {
-    const todayStr = new Date().toISOString().split('T')[0];
-    const cleanOut = String(checkOutStr).trim().split('T')[0];
-    if (cleanOut <= todayStr) {
-      return {
-        ...b,
-        status: 'completed'
-      };
-    }
-  }
-
-  return b;
+  return {
+    ...b,
+    status: status
+  };
 };
 
 /**
@@ -328,7 +304,6 @@ router.get('/full-dashboard', async (req, res) => {
       msgsRes,
       subsRes,
       cancelsRes1,
-      cancelsRes2,
       couponsRes,
       subsAdminsRes,
       reviewsRes,
@@ -341,11 +316,11 @@ router.get('/full-dashboard', async (req, res) => {
       query('SELECT * FROM contact_messages ORDER BY created_at DESC').catch(() => ({ rows: [] })),
       query('SELECT * FROM newsletter_subscribers ORDER BY subscribed_at DESC').catch(() => query('SELECT * FROM newsletter_subscribers').catch(() => ({ rows: [] }))),
       query('SELECT * FROM cancellations ORDER BY created_at DESC').catch(() => ({ rows: [] })),
-      query('SELECT * FROM cancel_bookings ORDER BY created_at DESC').catch(() => ({ rows: [] })),
       query('SELECT * FROM coupons ORDER BY created_at DESC').catch(() => ({ rows: [] })),
       query('SELECT * FROM subadmins ORDER BY created_at DESC').catch(() => ({ rows: [] })),
       query('SELECT * FROM reviews ORDER BY created_at DESC').catch(() => ({ rows: [] })),
-      query("SELECT * FROM platform_config WHERE id = 'default' OR id = 'global' LIMIT 1").catch(() => ({ rows: [] }))
+      query("SELECT * FROM platform_config WHERE id = 'default' OR id = 'global' LIMIT 1").catch(() => ({ rows: [] })),
+      query('SELECT * FROM help_desk ORDER BY created_at DESC').catch(() => query('SELECT * FROM "Help Desk" ORDER BY created_at DESC').catch(() => ({ rows: [] })))
     ]);
 
     const properties = propsRes.rows || [];
@@ -354,34 +329,9 @@ router.get('/full-dashboard', async (req, res) => {
     const applications = appsRes.rows || [];
     const messages = msgsRes.rows || [];
     const subscribers = subsRes.rows || [];
+    const issues = issuesRes?.rows || [];
     
-    // Unify cancellations from both tables
-    const cancMap = new Map();
-    (cancelsRes1.rows || []).forEach(item => {
-      const key = String(item.id || item.booking_id || '').toLowerCase().trim();
-      if (key) cancMap.set(key, extractBankDetails(item));
-    });
-    (cancelsRes2.rows || []).forEach(item => {
-      const key = String(item.id || item.booking_id || '').toLowerCase().trim();
-      if (key) {
-        const existing = cancMap.get(key);
-        const parsed = extractBankDetails(item);
-        if (existing) {
-          cancMap.set(key, {
-            ...existing,
-            ...parsed,
-            bank_name: parsed.bank_name || existing.bank_name || null,
-            account_holder_name: parsed.account_holder_name || existing.account_holder_name || null,
-            account_number: parsed.account_number || existing.account_number || null,
-            ifsc_code: parsed.ifsc_code || existing.ifsc_code || null,
-            upi_id: parsed.upi_id || existing.upi_id || null
-          });
-        } else {
-          cancMap.set(key, parsed);
-        }
-      }
-    });
-    const cancellations = Array.from(cancMap.values());
+    const cancellations = (cancelsRes1.rows || []).map(extractBankDetails);
 
     const coupons = couponsRes.rows || [];
     const subadmins = (subsAdminsRes.rows || []).filter(s => {
@@ -432,7 +382,8 @@ router.get('/full-dashboard', async (req, res) => {
       cancellations,
       coupons,
       subadmins,
-      reviews
+      reviews,
+      issues
     });
   } catch (err) {
     console.error('[Admin API] Full dashboard fetch error:', err.message);

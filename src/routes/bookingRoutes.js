@@ -8,37 +8,10 @@ import { query } from '../db.js';
 export const normalizeBookingStatus = (b) => {
   if (!b) return b;
   const status = String(b.status || 'confirmed').toLowerCase().trim();
-  const isCancelledOrPending = [
-    'cancelled',
-    'cancelled_by_guest',
-    'cancelled_by_host',
-    'cancellation_pending',
-    'cancellation_requested',
-    'rejected',
-    'declined',
-    'refunded',
-    'pending',
-    'pending_approval',
-    'pending_host_approval'
-  ].includes(status);
-
-  if (isCancelledOrPending) {
-    return b;
-  }
-
-  const checkOutStr = b.check_out || b.checkOut;
-  if (checkOutStr) {
-    const todayStr = new Date().toISOString().split('T')[0];
-    const cleanOut = String(checkOutStr).trim().split('T')[0];
-    if (cleanOut < todayStr) {
-      return {
-        ...b,
-        status: 'completed'
-      };
-    }
-  }
-
-  return b;
+  return {
+    ...b,
+    status: status
+  };
 };
 
 const router = express.Router();
@@ -53,16 +26,21 @@ const ensureBookingsTable = async () => {
         id VARCHAR(255) PRIMARY KEY,
         booking_id VARCHAR(255),
         user_email VARCHAR(255),
+        guest_email VARCHAR(255),
         user_name VARCHAR(255),
+        guest_name VARCHAR(255),
         user_phone VARCHAR(255),
+        guest_phone VARCHAR(255),
         property_id VARCHAR(255),
         property_name VARCHAR(255),
+        property_title VARCHAR(255),
         host_email VARCHAR(255),
         host_name VARCHAR(255),
         check_in VARCHAR(255),
         check_out VARCHAR(255),
         guests VARCHAR(100),
         total_amount VARCHAR(100),
+        total_price VARCHAR(100),
         paid_amount VARCHAR(100),
         remaining_amount VARCHAR(100),
         payment_id VARCHAR(255),
@@ -70,24 +48,6 @@ const ensureBookingsTable = async () => {
         created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
       );
     `);
-    const cols = [
-      'booking_id VARCHAR(255)',
-      'user_email VARCHAR(255)',
-      'user_name VARCHAR(255)',
-      'user_phone VARCHAR(255)',
-      'property_id VARCHAR(255)',
-      'property_name VARCHAR(255)',
-      'host_email VARCHAR(255)',
-      'host_name VARCHAR(255)',
-      'total_amount VARCHAR(100)',
-      'paid_amount VARCHAR(100)',
-      'remaining_amount VARCHAR(100)',
-      'payment_id VARCHAR(255)',
-      'status VARCHAR(50) DEFAULT \'confirmed\''
-    ];
-    for (const c of cols) {
-      await query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS ${c};`).catch(() => {});
-    }
   } catch (err) {
     console.warn('Bookings table init check:', err.message);
   }
@@ -95,7 +55,7 @@ const ensureBookingsTable = async () => {
 
 /**
  * POST /api/bookings
- * Raw SQL query to insert a new booking
+ * Inserts a new booking directly into PostgreSQL database table [bookings]
  */
 router.post('/', async (req, res) => {
   const { 
@@ -122,43 +82,49 @@ router.post('/', async (req, res) => {
   const finalHostName = (host_name || req.body.owner_name || 'Local Host').trim();
   const finalCheckIn = (check_in || '').trim();
   const finalCheckOut = (check_out || '').trim();
+
   const parseRawGuests = (g) => {
-    if (typeof g === 'number') {
-      if (g === 21) return 2;
-      return g;
-    }
-    const str = String(g || '').trim();
-    const match = str.match(/^(\d+)/) || str.match(/(\d+)\s*guest/i);
-    if (match) {
-      const n = parseInt(match[1], 10);
-      if (n === 21 && str.includes('1 Room')) return 2;
-      if (!isNaN(n) && n > 0) return n;
-    }
-    return 2;
+    if (typeof g === 'number') return `${g} Guests`;
+    const str = String(g || '2 Guests').trim();
+    return str.includes('Guest') ? str : `${str} Guests`;
   };
+
   const finalGuests = parseRawGuests(guests);
-  const finalStatus = (status || 'pending').trim().toLowerCase();
+  const finalStatus = (status || 'confirmed').trim().toLowerCase();
   const finalPaymentId = (payment_id || '').trim();
 
   try {
     const rawSql = `
       INSERT INTO bookings (
-        id, booking_id, user_email, user_name, user_phone, property_id, property_name, host_email, host_name, check_in, check_out, guests, total_amount, paid_amount, remaining_amount, payment_id, status, created_at
+        id, booking_id, user_email, guest_email, user_name, guest_name, user_phone, guest_phone,
+        property_id, property_name, property_title, host_email, host_name,
+        check_in, check_out, guests, total_amount, total_price, paid_amount, remaining_amount,
+        payment_id, status, created_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, NOW())
+      VALUES (
+        $1, $2, $3, $4, $5, $6, $7, $8,
+        $9, $10, $11, $12, $13,
+        $14, $15, $16, $17, $18, $19, $20,
+        $21, $22, NOW()
+      )
       ON CONFLICT (id) DO UPDATE SET
         booking_id = EXCLUDED.booking_id,
         user_email = EXCLUDED.user_email,
+        guest_email = EXCLUDED.guest_email,
         user_name = EXCLUDED.user_name,
+        guest_name = EXCLUDED.guest_name,
         user_phone = EXCLUDED.user_phone,
+        guest_phone = EXCLUDED.guest_phone,
         property_id = EXCLUDED.property_id,
         property_name = EXCLUDED.property_name,
+        property_title = EXCLUDED.property_title,
         host_email = EXCLUDED.host_email,
         host_name = EXCLUDED.host_name,
         check_in = EXCLUDED.check_in,
         check_out = EXCLUDED.check_out,
         guests = EXCLUDED.guests,
         total_amount = EXCLUDED.total_amount,
+        total_price = EXCLUDED.total_price,
         paid_amount = EXCLUDED.paid_amount,
         remaining_amount = EXCLUDED.remaining_amount,
         payment_id = EXCLUDED.payment_id,
@@ -167,31 +133,36 @@ router.post('/', async (req, res) => {
     `;
 
     const params = [
-      primaryId,
-      finalBookingId,
-      finalUserEmail,
-      finalUserName,
-      finalUserPhone,
-      finalPropId,
-      finalPropName,
-      finalHostEmail,
-      finalHostName,
-      finalCheckIn,
-      finalCheckOut,
-      finalGuests,
-      totalVal.toString(),
-      paidVal.toString(),
-      remainingVal.toString(),
-      finalPaymentId,
-      finalStatus
+      primaryId,              // $1
+      finalBookingId,         // $2
+      finalUserEmail,         // $3
+      finalUserEmail,         // $4
+      finalUserName,          // $5
+      finalUserName,          // $6
+      finalUserPhone,         // $7
+      finalUserPhone,         // $8
+      finalPropId,            // $9
+      finalPropName,          // $10
+      finalPropName,          // $11
+      finalHostEmail,         // $12
+      finalHostName,          // $13
+      finalCheckIn,           // $14
+      finalCheckOut,          // $15
+      finalGuests.toString(), // $16
+      totalVal.toString(),    // $17
+      totalVal.toString(),    // $18
+      paidVal.toString(),     // $19
+      remainingVal.toString(),// $20
+      finalPaymentId,         // $21
+      finalStatus             // $22
     ];
 
     const result = await query(rawSql, params);
 
     return res.json({ 
       success: true, 
-      message: 'Booking created successfully', 
-      booking: (result && result.rows && result.rows[0]) ? result.rows[0] : { id: uuid, booking_id: finalBookingId, user_email: finalUserEmail, property_name: finalPropName } 
+      message: 'Booking created successfully in PostgreSQL database!', 
+      booking: (result && result.rows && result.rows[0]) ? result.rows[0] : { id: primaryId, booking_id: finalBookingId, user_email: finalUserEmail, property_name: finalPropName } 
     });
   } catch (error) {
     console.error('Create booking error:', error);
@@ -201,7 +172,7 @@ router.post('/', async (req, res) => {
 
 /**
  * GET /api/bookings/user/:userEmail
- * Raw SQL query to fetch all bookings for a user by email or name
+ * Fetch all bookings for a user by email or name directly from PostgreSQL database
  */
 router.get('/user/:userEmail', async (req, res) => {
   const { userEmail } = req.params;
@@ -237,6 +208,7 @@ router.get('/host/:hostEmail', async (req, res) => {
   const { hostEmail } = req.params;
 
   try {
+    await ensureBookingsTable();
     const rawSql = `
       SELECT * FROM bookings
       WHERE LOWER(host_email) = LOWER($1) OR LOWER(user_email) = LOWER($1)
@@ -258,6 +230,7 @@ router.get('/host/:hostEmail', async (req, res) => {
  */
 router.get('/all', async (req, res) => {
   try {
+    await ensureBookingsTable();
     const rawSql = `
       SELECT * FROM bookings
       ORDER BY created_at DESC;
@@ -283,11 +256,23 @@ router.put('/:id/status', async (req, res) => {
     return res.status(400).json({ success: false, message: 'Status is required.' });
   }
 
+  const cleanId = (id || '').trim();
+  const digitsOnly = cleanId.replace(/\D/g, '');
+
   try {
-    await query(
-      'UPDATE bookings SET status = $1 WHERE id = $2 OR booking_id = $2 OR payment_id = $2',
-      [status, id]
-    );
+    await ensureBookingsTable();
+    const rawSql = `
+      UPDATE bookings
+      SET status = $1
+      WHERE LOWER(id) = LOWER($2)
+         OR LOWER(booking_id) = LOWER($2)
+         OR LOWER(payment_id) = LOWER($2)
+         OR LOWER(REPLACE(id, 'sik-', '')) = LOWER(REPLACE($2, 'sik-', ''))
+         OR LOWER(REPLACE(booking_id, 'sik-', '')) = LOWER(REPLACE($2, 'sik-', ''))
+         OR ($3 <> '' AND (id LIKE '%' || $3 || '%' OR booking_id LIKE '%' || $3 || '%'))
+      RETURNING *;
+    `;
+    const updateResult = await query(rawSql, [status.toLowerCase().trim(), cleanId, digitsOnly]);
 
     // If status is updated to cancelled, check and auto-create cancellation records
     if (status === 'cancelled') {
@@ -308,34 +293,42 @@ router.put('/:id/status', async (req, res) => {
 
           if (!cancelRes || !cancelRes.rows || cancelRes.rows.length === 0) {
             const cncId = `CNC-${Math.floor(100000 + Math.random() * 900000)}`;
-            const paidAmount = parseFloat(booking.paid_amount || 0);
+            const parseVal = (v) => {
+              if (typeof v === 'number') return isNaN(v) ? 0 : v;
+              if (!v) return 0;
+              const num = parseFloat(String(v).replace(/[^\d.]/g, ''));
+              return isNaN(num) ? 0 : num;
+            };
 
-            // Insert into cancel_bookings
-            await query(
-              `INSERT INTO cancel_bookings (
-                id, booking_id, user_email, user_name, property_name, check_in, check_out, paid_amount, refund_amount, refund_percentage, cancellation_reason, status, refund_status, created_at, updated_at
-              ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'pending', NOW(), NOW())`,
-              [
-                cncId,
-                bookingId,
-                booking.user_email || 'guest@example.com',
-                booking.user_name || 'Guest User',
-                booking.property_name || 'Konkan Homestay',
-                booking.check_in || '',
-                booking.check_out || '',
-                paidAmount,
-                paidAmount,
-                100,
-                'Cancelled by Admin/System',
-                'approved'
-              ]
-            );
+            let paidAmount = parseVal(booking.paid_amount);
+            const totalPrice = parseVal(booking.total_amount || booking.total_price);
+            if (paidAmount <= 0 && totalPrice > 0) {
+              paidAmount = Math.round((totalPrice * 20) / 100);
+            }
+            if (paidAmount <= 0) {
+              paidAmount = 1500;
+            }
+
+            let checkInDate = new Date(booking.check_in || '');
+            if (isNaN(checkInDate.getTime())) checkInDate = new Date();
+            const today = new Date();
+            today.setHours(0, 0, 0, 0);
+            checkInDate.setHours(0, 0, 0, 0);
+            const diffDays = Math.ceil((checkInDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+
+            let refundPct = 0;
+            if (diffDays >= 7) refundPct = 100;
+            else if (diffDays >= 3) refundPct = 50;
+            else refundPct = 0;
+
+            const refundAmount = Math.round((paidAmount * refundPct) / 100);
 
             // Insert into cancellations
             await query(
               `INSERT INTO cancellations (
                 id, booking_id, user_email, user_name, property_name, check_in, check_out, paid_amount, refund_amount, refund_percentage, cancellation_reason, status, refund_status, created_at
-              ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'pending', NOW())`,
+              ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'pending', NOW())
+              ON CONFLICT (id) DO UPDATE SET status = EXCLUDED.status, refund_amount = EXCLUDED.refund_amount`,
               [
                 cncId,
                 bookingId,
@@ -345,8 +338,8 @@ router.put('/:id/status', async (req, res) => {
                 booking.check_in || '',
                 booking.check_out || '',
                 paidAmount,
-                paidAmount,
-                100,
+                refundAmount,
+                refundPct,
                 'Cancelled by Admin/System',
                 'approved'
               ]
@@ -358,10 +351,14 @@ router.put('/:id/status', async (req, res) => {
       }
     }
 
-    return res.json({ success: true, message: `Booking ${id} status updated to ${status}.` });
+    return res.json({
+      success: true,
+      message: `Booking status updated to ${status}`,
+      booking: updateResult?.rows?.[0] || null
+    });
   } catch (error) {
     console.error('Update booking status error:', error);
-    return res.json({ success: true, message: `Booking ${id} status set to ${status}.` });
+    return res.status(500).json({ success: false, message: error.message });
   }
 });
 
@@ -371,17 +368,13 @@ router.put('/:id/status', async (req, res) => {
  */
 router.delete('/:id', async (req, res) => {
   const { id } = req.params;
-  const cleanId = (id || '').trim();
-
   try {
-    await query(
-      'DELETE FROM bookings WHERE id = $1 OR booking_id = $1 OR payment_id = $1',
-      [cleanId]
-    );
-    return res.json({ success: true, message: `Booking ${cleanId} deleted successfully.` });
+    await ensureBookingsTable();
+    await query('DELETE FROM bookings WHERE id = $1 OR booking_id = $1', [id]);
+    return res.json({ success: true, message: `Booking ${id} deleted successfully.` });
   } catch (error) {
     console.error('Delete booking error:', error);
-    return res.status(500).json({ success: false, message: error.message || 'Database error' });
+    return res.status(500).json({ success: false, message: error.message });
   }
 });
 

@@ -13,6 +13,8 @@ import wishlistRoutes from './routes/wishlistRoutes.js';
 import reviewRoutes from './routes/reviewRoutes.js';
 import cancellationRoutes from './routes/cancellationRoutes.js';
 import couponRoutes from './routes/couponRoutes.js';
+import bankRoutes from './routes/bankRoutes.js';
+import uploadRoutes from './routes/uploadRoutes.js';
 
 import errorRoutes, { generateErrorId, sanitizeSensitiveData, calculateSeverity } from './routes/errorRoutes.js';
 import issueRoutes from './routes/issueRoutes.js';
@@ -75,6 +77,8 @@ app.use('/api/wishlists', wishlistRoutes);
 app.use('/api/reviews', reviewRoutes);
 app.use('/api/cancellations', cancellationRoutes);
 app.use('/api/coupons', couponRoutes);
+app.use('/api/bank-details', bankRoutes);
+app.use('/api/upload', uploadRoutes);
 app.use('/api/errors', errorRoutes);
 app.use('/api/issues', issueRoutes);
 
