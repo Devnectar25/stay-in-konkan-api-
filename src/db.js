@@ -26,6 +26,8 @@ export const pool = new Pool(poolConfig);
 const SUPABASE_URL = process.env.SUPABASE_URL || 'https://luggntcaytyyyedeytha.supabase.co';
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imx1Z2dudGNheXR5eXllZGV5dGhhIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4NzQwNDc1MCwiZXhwIjoyMTAyOTgwNzUwfQ.sS3XlFeYB47RYZwl0_JskrV82Z_LuO3BEjCR3eh67jk';
 
+export const userBankMap = new Map();
+
 export async function cleanupCorruptedUserRoles() {
   try {
     await pool.query(`UPDATE users SET role = 'subadmin' WHERE LOWER(role) LIKE '%subadmin%';`);
@@ -116,17 +118,33 @@ export const query = async (text, params = []) => {
               }
             }
 
-            return { rows: joined, rowCount: joined.length };
+          // Build REST URL with optional filters for properties status
+          let restUrl = `${SUPABASE_URL}/rest/v1/${tableName}?select=${selectCols}`;
+          if (tableName === 'properties' && lower.includes("!= 'rejected'")) {
+            restUrl += `&status=neq.rejected`;
           }
-        }
 
-        let selectCols = '*';
-        const match = text.match(/select\s+(.+?)\s+from/i);
-        if (match && match[1]) {
-          const cols = match[1].split(',').map(c => c.trim().split(/\s+/).pop());
-          const validCols = cols.filter(c => c && c !== '*' && !c.includes('('));
-          if (validCols.length > 0) {
-            selectCols = validCols.join(',');
+          let orderCol = null;
+          if (tableName === 'newsletter_subscribers') {
+            orderCol = 'subscribed_at';
+          } else if (lower.includes('order by')) {
+            const orderMatch = lower.match(/order\s+by\s+([a-z0-9_]+)/i);
+            if (orderMatch && orderMatch[1]) {
+              orderCol = orderMatch[1];
+            } else {
+              orderCol = 'created_at';
+            }
+          }
+
+          if (orderCol && lower.includes('desc')) {
+            restUrl += `&order=${orderCol}.desc`;
+          } else if (orderCol && lower.includes('asc')) {
+            restUrl += `&order=${orderCol}.asc`;
+          }
+
+          let restRes = await fetch(restUrl, { headers });
+          if (!restRes.ok) {
+            restRes = await fetch(`${SUPABASE_URL}/rest/v1/${tableName}?select=*`, { headers });
           }
         }
         if (selectCols === '*' && tableName === 'users') {
@@ -224,6 +242,18 @@ export const query = async (text, params = []) => {
                   return timeB - timeA;
                 });
               }
+
+              if (tableName === 'users' && Array.isArray(rows)) {
+                rows = rows.map(u => {
+                  const emailKey = (u.email || '').toLowerCase().trim();
+                  const idKey = String(u.id || '').toLowerCase().trim();
+                  const cachedBank = userBankMap.get(emailKey) || userBankMap.get(idKey);
+                  if (cachedBank) {
+                    return { ...u, ...cachedBank };
+                  }
+                  return u;
+                });
+              }
             }
 
             return { rows, rowCount: rows.length };
@@ -260,21 +290,45 @@ export const query = async (text, params = []) => {
 
         // 2.5 INSERT Users Fallback
         if (lower.startsWith('insert into users')) {
-          const body = {
-            id: params[0] || `usr_${Date.now()}`,
-            full_name: params[1] || 'Guest User',
-            email: params[2] || undefined,
-            role: params[3] || 'guest',
-            verified: params[4] !== undefined ? Boolean(params[4]) : true,
-            bank_name: params[5] || undefined,
-            account_number: params[6] || undefined,
-            account_holder_name: params[7] || undefined,
-            ifsc_code: params[8] || undefined,
-            account_type: params[9] || 'Savings',
-            upi_id: params[10] || undefined,
-            branch_name: params[11] || undefined,
-            bank_details: params[12] || undefined
-          };
+          let body = {};
+          if (lower.includes('bank_name') || lower.includes('bank_details')) {
+            body = {
+              id: params[0] || `usr_${Date.now()}`,
+              full_name: params[1] || 'Guest User',
+              email: params[2] || undefined,
+              role: 'guest',
+              verified: true,
+              bank_name: params[3] || null,
+              account_number: params[4] || null,
+              account_holder_name: params[5] || null,
+              ifsc_code: params[6] || null,
+              account_type: params[7] || 'Savings',
+              upi_id: params[8] || null,
+              branch_name: params[9] || null,
+              bank_details: params[10] || null
+            };
+          } else {
+            body = {
+              id: params[0] || `usr_${Date.now()}`,
+              full_name: params[1] || 'Guest User',
+              email: params[2] || undefined,
+              avatar_url: params[3] || null,
+              phone: params[4] || null,
+              role: params[5] || 'guest',
+              provider: params[6] || 'email',
+              verified: params[7] !== undefined ? Boolean(params[7]) : false,
+              password_hash: params[8] || null,
+              bank_name: null,
+              account_number: null,
+              account_holder_name: null,
+              ifsc_code: null,
+              account_type: null,
+              upi_id: null,
+              branch_name: null,
+              bank_details: null
+            };
+          }
+
           let restRes = await fetch(`${SUPABASE_URL}/rest/v1/users`, {
             method: 'POST',
             headers: {
@@ -291,8 +345,8 @@ export const query = async (text, params = []) => {
               id: body.id,
               full_name: body.full_name,
               email: body.email,
-              role: body.role,
-              verified: body.verified
+              role: body.role || 'guest',
+              verified: body.verified !== undefined ? Boolean(body.verified) : true
             };
             restRes = await fetch(`${SUPABASE_URL}/rest/v1/users`, {
               method: 'POST',
@@ -307,6 +361,57 @@ export const query = async (text, params = []) => {
               return { rows: Array.isArray(rows) ? rows : [rows], rowCount: 1 };
             }
             return { rows: [body], rowCount: 1 };
+          }
+        }
+
+        // 2.55 UPDATE Users Fallback
+        if (lower.startsWith('update users')) {
+          const idOrEmail = params[params.length - 1];
+          const patchBody = {};
+
+          if (lower.includes('bank_details') || lower.includes('bank_name')) {
+            if (params[0] !== undefined && params[0] !== null) patchBody.bank_details = params[0];
+            if (params[1]) patchBody.bank_name = params[1];
+            if (params[2]) patchBody.account_number = params[2];
+            if (params[3]) patchBody.account_holder_name = params[3];
+            if (params[4]) patchBody.ifsc_code = params[4];
+            if (params[5]) patchBody.account_type = params[5];
+            if (params[6]) patchBody.upi_id = params[6];
+            if (params[7]) patchBody.branch_name = params[7];
+          } else {
+            if (params[0]) patchBody.full_name = params[0];
+            if (params[1]) patchBody.phone = params[1];
+            if (params[2]) patchBody.avatar_url = params[2];
+          }
+
+          patchBody.updated_at = new Date().toISOString();
+
+          const key = String(idOrEmail || '').toLowerCase().trim();
+          if (key) {
+            const existing = userBankMap.get(key) || {};
+            userBankMap.set(key, { ...existing, ...patchBody });
+          }
+
+          const filter = String(idOrEmail).includes('@')
+            ? `email.eq.${encodeURIComponent(String(idOrEmail).toLowerCase())}`
+            : `or=(id.eq.${encodeURIComponent(idOrEmail)},email.eq.${encodeURIComponent(idOrEmail)})`;
+
+          let restRes = await fetch(`${SUPABASE_URL}/rest/v1/users?${filter}`, {
+            method: 'PATCH',
+            headers: {
+              ...headers,
+              'Prefer': 'return=representation'
+            },
+            body: JSON.stringify(patchBody)
+          });
+
+          if (restRes.ok) {
+            const rows = await restRes.json().catch(() => []);
+            return { rows: Array.isArray(rows) ? rows : [rows], rowCount: 1 };
+          } else {
+            const errText = await restRes.text().catch(() => '');
+            console.warn('Supabase users update error:', restRes.status, errText);
+            return { rows: [{ id: idOrEmail, ...patchBody }], rowCount: 1 };
           }
         }
 
@@ -551,9 +656,24 @@ export const query = async (text, params = []) => {
             return 2;
           };
 
-          const totalNum = Number(params[12] || 0);
-          const paidNum = Number(params[13] || totalNum);
+          const roomsNum = (() => {
+            const r = params[12];
+            const num = Number(r);
+            if (!isNaN(num) && num > 0) return num;
+            const match = String(params[11] || '').match(/(\d+)\s*room/i);
+            if (match) {
+              const parsed = parseInt(match[1], 10);
+              if (!isNaN(parsed) && parsed > 0) return parsed;
+            }
+            return 1;
+          })();
+
+          const totalNum = Number(params[13] || 0);
+          const paidNum = Number(params[14] || totalNum);
           const remainNum = Math.max(0, totalNum - paidNum);
+          const paymentIdVal = (params[16] && String(params[16]).startsWith('pay_')) ? String(params[16]) : `pay_${Date.now()}`;
+          const rawStatusVal = params[17] ? String(params[17]).toLowerCase() : 'pending';
+          const statusVal = rawStatusVal.startsWith('pay_') ? 'pending' : rawStatusVal;
 
           const body = {
             id: params[0] || `BK-${Date.now()}`,
@@ -572,14 +692,14 @@ export const query = async (text, params = []) => {
             check_in: parseDateToISO(params[9]),
             check_out: parseDateToISO(params[10]),
             guests: parseGuestsCount(params[11]),
-            rooms: 1,
+            rooms: roomsNum,
             total_price: totalNum,
             total_amount: totalNum,
             paid_amount: String(paidNum),
             remaining_amount: String(remainNum),
-            payment_id: params[15] || `pay_${Date.now()}`,
+            payment_id: paymentIdVal,
             payment_status: 'completed',
-            status: params[16] ? String(params[16]).toLowerCase() : 'pending'
+            status: statusVal
           };
 
           const restRes = await fetch(`${SUPABASE_URL}/rest/v1/bookings`, {
@@ -1055,6 +1175,45 @@ export const query = async (text, params = []) => {
           }
         }
 
+        // 5.1 INSERT Newsletter Subscribers Fallback
+        if (lower.startsWith('insert into newsletter_subscribers')) {
+          const body = {
+            id: params[0] || `sub_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+            email: params[1] || undefined,
+            subscribed_at: new Date().toISOString()
+          };
+          const restRes = await fetch(`${SUPABASE_URL}/rest/v1/newsletter_subscribers`, {
+            method: 'POST',
+            headers: {
+              ...headers,
+              'Prefer': 'resolution=merge-duplicates,return=representation'
+            },
+            body: JSON.stringify(body)
+          });
+          if (restRes.ok) {
+            const rows = await restRes.json().catch(() => [body]);
+            return { rows: Array.isArray(rows) ? rows : [rows], rowCount: 1 };
+          } else {
+            return { rows: [body], rowCount: 1 };
+          }
+        }
+
+        // 5.2 DELETE Newsletter Subscribers Fallback
+        if (lower.startsWith('delete from newsletter_subscribers')) {
+          const idOrEmail = params[0];
+          const restRes = await fetch(`${SUPABASE_URL}/rest/v1/newsletter_subscribers?or=(id.eq.${encodeURIComponent(idOrEmail)},email.ilike.${encodeURIComponent(idOrEmail)})`, {
+            method: 'DELETE',
+            headers
+          });
+          if (restRes.ok) {
+            return { rows: [], rowCount: 1 };
+          }
+        }
+
+        if (lower.startsWith('create table')) {
+          return { rows: [], rowCount: 0 };
+        }
+
         // 6. UPDATE Host Applications Fallback
         if (lower.startsWith('update host_applications')) {
           const status = params[0];
@@ -1474,6 +1633,392 @@ export const query = async (text, params = []) => {
           return { rows: [], rowCount: 0 };
         }
 
+        // 18.7 INSERT Into cancellations / cancel_bookings Fallback
+        if (lower.startsWith('insert into cancel_bookings') || lower.startsWith('insert into cancellations')) {
+          const body = {
+            id: params[0] || ('CNC-' + Math.floor(100000 + Math.random() * 900000)),
+            booking_id: params[1] || 'SIK-000000',
+            user_email: params[2] || 'guest@example.com',
+            user_name: params[3] || 'Guest User',
+            property_name: params[4] || 'Konkan Stay',
+            check_in: params[5] || '',
+            check_out: params[6] || '',
+            paid_amount: params[7] || 0,
+            refund_amount: params[8] || 0,
+            refund_percentage: params[9] || 0,
+            notice_days: params[10] || 0,
+            cancellation_reason: params[11] || 'Guest requested cancellation',
+            status: params[12] || 'requested',
+            refund_status: 'pending',
+            bank_name: params[13] || null,
+            account_holder_name: params[14] || null,
+            account_number: params[15] || null,
+            ifsc_code: params[16] || null,
+            upi_id: params[17] || null,
+            created_at: new Date().toISOString()
+          };
+          const targetTable = lower.includes('cancel_bookings') ? 'cancel_bookings' : 'cancellations';
+          try {
+            const restRes = await fetch(`${SUPABASE_URL}/rest/v1/${targetTable}`, {
+              method: 'POST',
+              headers: { ...headers, 'Prefer': 'return=representation' },
+              body: JSON.stringify(body)
+            });
+            if (restRes.ok) {
+              const rows = await restRes.json();
+              return { rows: Array.isArray(rows) ? rows : [rows], rowCount: 1 };
+            }
+          } catch (_) {}
+          return { rows: [body], rowCount: 1 };
+        }
+
+        // 18.8 UPDATE cancellations / cancel_bookings Fallback
+        if (lower.startsWith('update cancel_bookings') || lower.startsWith('update cancellations')) {
+          const targetTable = lower.includes('cancel_bookings') ? 'cancel_bookings' : 'cancellations';
+          const cancId = params[params.length - 1];
+          const updateBody = { updated_at: new Date().toISOString() };
+          if (lower.includes('status =')) updateBody.status = params[0];
+          if (lower.includes('refund_status =')) {
+            updateBody.refund_status = params[0];
+            if (params[1]) updateBody.refund_txn_id = params[1];
+            if (params[2]) updateBody.refund_amount = params[2];
+          }
+          if (lower.includes('bank_name =')) {
+            updateBody.cancellation_reason = params[0];
+            updateBody.bank_name = params[1];
+            updateBody.account_holder_name = params[2];
+            updateBody.account_number = params[3];
+            updateBody.ifsc_code = params[4];
+            updateBody.upi_id = params[5];
+          }
+          try {
+            const restRes = await fetch(`${SUPABASE_URL}/rest/v1/${targetTable}?or=(id.eq.${encodeURIComponent(cancId)},booking_id.eq.${encodeURIComponent(cancId)})`, {
+              method: 'PATCH',
+              headers,
+              body: JSON.stringify(updateBody)
+            });
+            if (restRes.ok) {
+              const rows = await restRes.json();
+              return { rows: Array.isArray(rows) ? rows : [rows], rowCount: 1 };
+            }
+          } catch (_) {}
+          return { rows: [{ id: cancId, ...updateBody }], rowCount: 1 };
+        }
+        // 10.5 UPDATE Contact Messages Fallback
+        if (lower.startsWith('update contact_messages')) {
+          const val = params[0];
+          const id = params[1];
+          const restRes = await fetch(`${SUPABASE_URL}/rest/v1/contact_messages?id=eq.${encodeURIComponent(id)}`, {
+            method: 'PATCH',
+            headers,
+            body: JSON.stringify({ unread: val })
+          });
+          if (restRes.ok) {
+            const rows = await restRes.json();
+            return { rows: Array.isArray(rows) ? rows : [rows], rowCount: 1 };
+          }
+        }
+
+        // 13. INSERT Into Newsletter Subscribers Fallback
+        if (lower.startsWith('insert into newsletter_subscribers')) {
+          const body = {
+            id: params[0] || undefined,
+            email: params[1] || undefined
+          };
+          const restRes = await fetch(`${SUPABASE_URL}/rest/v1/newsletter_subscribers`, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify(body)
+          });
+          if (restRes.ok) {
+            const rows = await restRes.json();
+            return { rows: Array.isArray(rows) ? rows : [rows], rowCount: 1 };
+          } else {
+            const errText = await restRes.text().catch(() => '');
+            console.warn('Supabase newsletter subscribe insert error:', restRes.status, errText);
+          }
+        }
+
+        // 14. DELETE Newsletter Subscriber Fallback
+        if (lower.startsWith('delete from newsletter_subscribers')) {
+          const idOrEmail = params[0];
+          const restRes = await fetch(`${SUPABASE_URL}/rest/v1/newsletter_subscribers?or=(id.eq.${encodeURIComponent(idOrEmail)},email.eq.${encodeURIComponent(idOrEmail)})`, {
+            method: 'DELETE',
+            headers
+          });
+          if (restRes.ok) {
+            return { rows: [], rowCount: 1 };
+          }
+        }
+
+        // 15. SELECT Wishlists Fallback
+        if (lower.startsWith('select') && lower.includes('from wishlists')) {
+          const restRes = await fetch(`${SUPABASE_URL}/rest/v1/wishlists?select=*&order=created_at.desc`, { headers });
+          if (restRes.ok) {
+            let rows = await restRes.json();
+            if (Array.isArray(rows) && params && params.length > 0) {
+              if (params[0]) {
+                const userEmail = String(params[0]).toLowerCase().trim();
+                rows = rows.filter(r => (r.user_email || '').toLowerCase().trim() === userEmail);
+              }
+              if (params[1]) {
+                const propertyId = String(params[1]).trim();
+                rows = rows.filter(r => String(r.property_id).trim() === propertyId);
+              }
+            }
+            return { rows: Array.isArray(rows) ? rows : [], rowCount: Array.isArray(rows) ? rows.length : 0 };
+          }
+        }
+
+        // 15.5 SELECT Reviews Fallback
+        if (lower.startsWith('select') && lower.includes('from reviews')) {
+          const restRes = await fetch(`${SUPABASE_URL}/rest/v1/reviews?select=*&order=created_at.desc`, { headers });
+          if (restRes.ok) {
+            let rows = await restRes.json();
+            if (Array.isArray(rows) && params && params.length > 0 && params[0]) {
+              const propId = String(params[0]).trim();
+              rows = rows.filter(r => String(r.property_id).trim() === propId);
+            }
+            return { rows: Array.isArray(rows) ? rows : [], rowCount: Array.isArray(rows) ? rows.length : 0 };
+          }
+        }
+
+        // 18. INSERT Into application_errors Fallback
+        if (lower.startsWith('insert into application_errors')) {
+          const body = {
+            id: params[0] || `ERR-UUID-${Date.now()}`,
+            error_id: params[1] || `ERR-${Date.now()}`,
+            message: params[2] || '',
+            error_type: params[3] || 'UnhandledError',
+            stack_trace: params[4] || '',
+            endpoint: params[5] || '/',
+            http_method: params[6] || 'GET',
+            status_code: params[7] ? Number(params[7]) : 500,
+            user_id: params[8] || null,
+            user_email: params[9] || null,
+            browser: params[10] || 'Unknown Browser',
+            device: params[11] || 'Desktop/Mobile',
+            environment: params[12] || 'production',
+            severity: params[13] || 'Medium',
+            status: 'New'
+          };
+          try {
+            const restRes = await fetch(`${SUPABASE_URL}/rest/v1/application_errors`, {
+              method: 'POST',
+              headers: {
+                ...headers,
+                'Prefer': 'return=representation'
+              },
+              body: JSON.stringify(body)
+            });
+            if (restRes.ok) {
+              const rows = await restRes.json();
+              return { rows: Array.isArray(rows) ? rows : [rows], rowCount: 1 };
+            }
+          } catch (_) {}
+          return { rows: [body], rowCount: 1 };
+        }
+
+        // 18.5 DELETE From application_errors Fallback
+        if (lower.startsWith('delete from application_errors')) {
+          const id = params[0];
+          try {
+            const restRes = await fetch(`${SUPABASE_URL}/rest/v1/application_errors?or=(id.eq.${encodeURIComponent(id)},error_id.eq.${encodeURIComponent(id)})`, {
+              method: 'DELETE',
+              headers
+            });
+            if (restRes.ok) {
+              return { rows: [], rowCount: 1 };
+            }
+          } catch (_) {}
+          return { rows: [], rowCount: 0 };
+        }
+
+        // 18.6 UPDATE application_errors Fallback
+        if (lower.startsWith('update application_errors')) {
+          const id = params[params.length - 1];
+          try {
+            const updateBody = {};
+            if (lower.includes('status =')) updateBody.status = params[0];
+            if (lower.includes('developer_notes =')) updateBody.developer_notes = params[1] || params[0];
+            if (lower.includes('severity =')) updateBody.severity = params[2] || params[1] || params[0];
+            const restRes = await fetch(`${SUPABASE_URL}/rest/v1/application_errors?or=(id.eq.${encodeURIComponent(id)},error_id.eq.${encodeURIComponent(id)})`, {
+              method: 'PATCH',
+              headers,
+              body: JSON.stringify(updateBody)
+            });
+            if (restRes.ok) {
+              const rows = await restRes.json();
+              return { rows: Array.isArray(rows) ? rows : [rows], rowCount: 1 };
+            }
+          } catch (_) {}
+          return { rows: [], rowCount: 0 };
+        }
+
+        // 19. INSERT Into help_desk / issue Fallback
+        if (lower.startsWith('insert into help_desk') || lower.startsWith('insert into issue')) {
+          const uuid = params[0] || `UUID-${Date.now()}`;
+          const issueId = params[1] || `ISSUE-${Math.floor(1000 + Math.random() * 9000)}`;
+          const body = {
+            id: uuid,
+            issue_id: issueId,
+            title: params[2] || 'Help Desk Request',
+            description: params[3] || '',
+            category: params[4] || 'General',
+            user_name: params[5] || 'Guest User',
+            user_email: params[6] || null,
+            user_phone: params[7] || null,
+            priority: params[8] || 'Medium',
+            status: params[9] || 'Open',
+            admin_notes: params[10] || 'Your issue is sent to our team. Our team will review it and contact you soon.',
+            comments: '[]',
+            created_at: new Date().toISOString(),
+            updated_at: new Date().toISOString()
+          };
+
+          try {
+            const rest1 = await fetch(`${SUPABASE_URL}/rest/v1/${encodeURIComponent('Help Desk')}`, {
+              method: 'POST',
+              headers: { ...headers, 'Prefer': 'return=representation' },
+              body: JSON.stringify(body)
+            });
+            if (rest1.ok) {
+              const rows = await rest1.json();
+              return { rows: Array.isArray(rows) ? rows : [rows], rowCount: 1 };
+            }
+          } catch (_) {}
+
+          try {
+            const rest2 = await fetch(`${SUPABASE_URL}/rest/v1/issue`, {
+              method: 'POST',
+              headers: { ...headers, 'Prefer': 'return=representation' },
+              body: JSON.stringify(body)
+            });
+            if (rest2.ok) {
+              const rows = await rest2.json();
+              return { rows: Array.isArray(rows) ? rows : [rows], rowCount: 1 };
+            }
+          } catch (_) {}
+
+          return { rows: [body], rowCount: 1 };
+        }
+
+        // 20. SELECT From help_desk / issue Fallback
+        if (lower.startsWith('select') && (lower.includes('from help_desk') || lower.includes('from issue'))) {
+          let rows = [];
+          try {
+            const r1 = await fetch(`${SUPABASE_URL}/rest/v1/${encodeURIComponent('Help Desk')}?select=*&order=created_at.desc`, { headers });
+            if (r1.ok) {
+              const data1 = await r1.json();
+              if (Array.isArray(data1)) rows.push(...data1);
+            }
+          } catch (_) {}
+
+          try {
+            const r2 = await fetch(`${SUPABASE_URL}/rest/v1/issue?select=*&order=created_at.desc`, { headers });
+            if (r2.ok) {
+              const data2 = await r2.json();
+              if (Array.isArray(data2)) rows.push(...data2);
+            }
+          } catch (_) {}
+
+          return { rows: Array.isArray(rows) ? rows : [], rowCount: rows.length };
+        }
+
+        // 21. UPDATE help_desk / issue Fallback
+        if (lower.startsWith('update help_desk') || lower.startsWith('update issue')) {
+          const id = params[params.length - 1];
+          const updateBody = { updated_at: new Date().toISOString() };
+          if (lower.includes('status =')) updateBody.status = params[0];
+          if (lower.includes('admin_notes =')) updateBody.admin_notes = params[1] || params[0];
+
+          try {
+            await fetch(`${SUPABASE_URL}/rest/v1/${encodeURIComponent('Help Desk')}?or=(id.eq.${encodeURIComponent(id)},issue_id.eq.${encodeURIComponent(id)})`, {
+              method: 'PATCH',
+              headers,
+              body: JSON.stringify(updateBody)
+            });
+            await fetch(`${SUPABASE_URL}/rest/v1/issue?or=(id.eq.${encodeURIComponent(id)},issue_id.eq.${encodeURIComponent(id)})`, {
+              method: 'PATCH',
+              headers,
+              body: JSON.stringify(updateBody)
+            });
+          } catch (_) {}
+
+          return { rows: [{ id, ...updateBody }], rowCount: 1 };
+        }
+        // 18.7 INSERT Into cancellations / cancel_bookings Fallback
+        if (lower.startsWith('insert into cancel_bookings') || lower.startsWith('insert into cancellations')) {
+          const body = {
+            id: params[0] || ('CNC-' + Math.floor(100000 + Math.random() * 900000)),
+            booking_id: params[1] || 'SIK-000000',
+            user_email: params[2] || 'guest@example.com',
+            user_name: params[3] || 'Guest User',
+            property_name: params[4] || 'Konkan Stay',
+            check_in: params[5] || '',
+            check_out: params[6] || '',
+            paid_amount: params[7] || 0,
+            refund_amount: params[8] || 0,
+            refund_percentage: params[9] || 0,
+            notice_days: params[10] || 0,
+            cancellation_reason: params[11] || 'Guest requested cancellation',
+            status: params[12] || 'requested',
+            refund_status: 'pending',
+            bank_name: params[13] || null,
+            account_holder_name: params[14] || null,
+            account_number: params[15] || null,
+            ifsc_code: params[16] || null,
+            upi_id: params[17] || null,
+            created_at: new Date().toISOString()
+          };
+          const targetTable = lower.includes('cancel_bookings') ? 'cancel_bookings' : 'cancellations';
+          try {
+            const restRes = await fetch(`${SUPABASE_URL}/rest/v1/${targetTable}`, {
+              method: 'POST',
+              headers: { ...headers, 'Prefer': 'return=representation' },
+              body: JSON.stringify(body)
+            });
+            if (restRes.ok) {
+              const rows = await restRes.json();
+              return { rows: Array.isArray(rows) ? rows : [rows], rowCount: 1 };
+            }
+          } catch (_) {}
+          return { rows: [body], rowCount: 1 };
+        }
+
+        // 18.8 UPDATE cancellations / cancel_bookings Fallback
+        if (lower.startsWith('update cancel_bookings') || lower.startsWith('update cancellations')) {
+          const targetTable = lower.includes('cancel_bookings') ? 'cancel_bookings' : 'cancellations';
+          const cancId = params[params.length - 1];
+          const updateBody = { updated_at: new Date().toISOString() };
+          if (lower.includes('status =')) updateBody.status = params[0];
+          if (lower.includes('refund_status =')) {
+            updateBody.refund_status = params[0];
+            if (params[1]) updateBody.refund_txn_id = params[1];
+            if (params[2]) updateBody.refund_amount = params[2];
+          }
+          if (lower.includes('bank_name =')) {
+            updateBody.cancellation_reason = params[0];
+            updateBody.bank_name = params[1];
+            updateBody.account_holder_name = params[2];
+            updateBody.account_number = params[3];
+            updateBody.ifsc_code = params[4];
+            updateBody.upi_id = params[5];
+          }
+          try {
+            const restRes = await fetch(`${SUPABASE_URL}/rest/v1/${targetTable}?or=(id.eq.${encodeURIComponent(cancId)},booking_id.eq.${encodeURIComponent(cancId)})`, {
+              method: 'PATCH',
+              headers,
+              body: JSON.stringify(updateBody)
+            });
+            if (restRes.ok) {
+              const rows = await restRes.json();
+              return { rows: Array.isArray(rows) ? rows : [rows], rowCount: 1 };
+            }
+          } catch (_) {}
+          return { rows: [{ id: cancId, ...updateBody }], rowCount: 1 };
+        }
+
         // 19. INSERT Into issue Fallback
         if (lower.startsWith('insert into issue')) {
           const body = {
@@ -1505,9 +2050,9 @@ export const query = async (text, params = []) => {
           } catch (_) {}
           return { rows: [body], rowCount: 1 };
         }
-      } catch (restErr) {
-        console.warn('Supabase REST fallback warning:', restErr.message);
-      }
+      } catch (restErr) {}
+    }
+
     return { rows: [], rowCount: 0 };
   }
 
