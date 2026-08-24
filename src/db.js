@@ -262,6 +262,7 @@ export const query = async (text, params = []) => {
             return { rows, rowCount: rows.length };
           }
         }
+      }
 
         // 2. INSERT Host Applications Fallback
         if (lower.startsWith('insert into host_applications')) {
@@ -2057,9 +2058,6 @@ export const query = async (text, params = []) => {
     }
 
     return { rows: [], rowCount: 0 };
-  }
-
-  return { rows: [], rowCount: 0 };
 };
 
 pool.on('error', (err) => {
