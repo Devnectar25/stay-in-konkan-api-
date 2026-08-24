@@ -95,8 +95,9 @@ router.post('/sync', async (req, res) => {
   const userId = id || `usr_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`;
   const name = full_name || cleanEmail.split('@')[0];
   let userRole = 'guest';
-  if (cleanEmail === 'admin@stayinkonkan.com' || cleanEmail.includes('admin21') || cleanEmail.startsWith('admin')) {
-    userRole = role ? String(role).toLowerCase().trim() : 'admin';
+  const explicitAdminEmails = ['admin@stayinkonkan.com', 'admin@gmail.com', 'admin@stayinkonkan.in'];
+  if (explicitAdminEmails.includes(cleanEmail)) {
+    userRole = 'admin';
   } else if (role && ['admin', 'subadmin', 'host', 'guest'].includes(String(role).toLowerCase().trim())) {
     userRole = String(role).toLowerCase().trim();
   } else if (role && String(role).toLowerCase().includes('subadmin')) {
