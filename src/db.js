@@ -96,73 +96,14 @@ export const query = async (text, params = []) => {
     try {
       // 1. SELECT Query Fallback with Parameter Filtering
       if (lower.startsWith('select')) {
-        // In-memory properties JOIN users fallback
-        if (lower.includes('join') && tableName === 'properties') {
-          const propsRes = await fetch(`${SUPABASE_URL}/rest/v1/properties?select=id,name,title,host,host_email,host_phone,location,price,type,status,description,rating,reviews_count,image,image_url,facility1_image,facility2_image,facility3_image,rooms,created_at`, { headers });
-          const usersRes = await fetch(`${SUPABASE_URL}/rest/v1/users?select=id,full_name,email`, { headers });
-          if (propsRes.ok && usersRes.ok) {
-            const props = await propsRes.json();
-            const users = await usersRes.json();
-            let joined = props.map(p => {
-              const user = users.find(u => (u.email || '').toLowerCase().trim() === (p.host_email || '').toLowerCase().trim());
-              return {
-                ...p,
-                owner_name: user ? user.full_name : (p.host || 'Registered Host'),
-                owner_email: user ? user.email : (p.host_email || '')
-              };
-            });
-
-            const statusMatch = lower.match(/status\s*=\s*\$(\d+)/);
-            if (statusMatch && statusMatch[1]) {
-              const statusIdx = parseInt(statusMatch[1], 10) - 1;
-              const statusVal = params[statusIdx];
-              if (statusVal && statusVal !== 'all') {
-                joined = joined.filter(r => String(r.status).toLowerCase().trim() === String(statusVal).toLowerCase().trim());
-              }
-            }
-
-          // Build REST URL with optional filters for properties status
-          let restUrl = `${SUPABASE_URL}/rest/v1/${tableName}?select=${selectCols}`;
-          if (tableName === 'properties' && lower.includes("!= 'rejected'")) {
-            restUrl += `&status=neq.rejected`;
-          }
-
-          let orderCol = null;
-          if (tableName === 'newsletter_subscribers') {
-            orderCol = 'subscribed_at';
-          } else if (lower.includes('order by')) {
-            const orderMatch = lower.match(/order\s+by\s+([a-z0-9_]+)/i);
-            if (orderMatch && orderMatch[1]) {
-              orderCol = orderMatch[1];
-            } else {
-              orderCol = 'created_at';
-            }
-          }
-
-          if (orderCol && lower.includes('desc')) {
-            restUrl += `&order=${orderCol}.desc`;
-          } else if (orderCol && lower.includes('asc')) {
-            restUrl += `&order=${orderCol}.asc`;
-          }
-
-          let restRes = await fetch(restUrl, { headers });
-          if (!restRes.ok) {
-            restRes = await fetch(`${SUPABASE_URL}/rest/v1/${tableName}?select=*`, { headers });
-          }
-        }
-        if (selectCols === '*' && tableName === 'users') {
-          selectCols = 'id,full_name,email,avatar_url,phone,role,provider,verified,created_at';
-        } else if (selectCols === '*' && tableName === 'properties') {
-          selectCols = 'id,name,title,host,host_email,host_phone,location,price,type,status,description,rating,reviews_count,image,image_url,facility1_image,facility2_image,facility3_image,rooms,created_at,is_featured,show_on_home_screen,featured';
-        }
-
+        let selectCols = '*';
         let sortField = 'created_at';
         if (tableName === 'newsletter_subscribers') {
           sortField = 'subscribed_at';
         }
 
         // Build REST URL with optional filters for properties status
-        let restUrl = `${SUPABASE_URL}/rest/v1/${tableName}?select=${selectCols}`;
+        let restUrl = `${SUPABASE_URL}/rest/v1/${tableName}?select=*`;
         if (tableName === 'properties' && lower.includes("!= 'rejected'")) {
           restUrl += `&status=neq.rejected`;
         }
@@ -170,97 +111,93 @@ export const query = async (text, params = []) => {
           restUrl += `&order=${sortField}.desc`;
         }
         let restRes = await fetch(restUrl, { headers });
-        if (!restRes.ok && selectCols !== '*') {
-          restRes = await fetch(`${SUPABASE_URL}/rest/v1/${tableName}?select=*${lower.includes('desc') ? `&order=${sortField}.desc` : ''}`, { headers });
-        }
         if (!restRes.ok) {
           restRes = await fetch(`${SUPABASE_URL}/rest/v1/${tableName}?select=*`, { headers });
         }
-          if (restRes.ok) {
-            let rows = await restRes.json();
+        if (restRes.ok) {
+          let rows = await restRes.json();
 
-            // Filter rows if parameters/roles are supplied
-            if (Array.isArray(rows)) {
-              if (params && params.length > 0 && params[0] !== undefined) {
-                const p0 = String(params[0]).toLowerCase().trim();
-                if (lower.includes('where') || lower.includes('$1')) {
-                  rows = rows.filter(r => {
-                    const rEmail = (r.email || r.user_email || r.applicant_email || r.guest_email || '').toLowerCase().trim();
-                    const rId = (r.id || r.booking_id || r.application_id || r.issue_id || r.error_id || '').toLowerCase().trim();
-                    const rHostEmail = (r.host_email || r.owner_email || '').toLowerCase().trim();
-                    const rPropId = (r.property_id || '').toLowerCase().trim();
-                    // If checking property_id with $1 (e.g. SELECT FROM reviews WHERE property_id = $1)
-                    if (lower.includes('property_id = $1') || lower.includes('property_id=$1')) {
-                      return rPropId === p0;
-                    }
-                    // If checking role with $1 (e.g. SELECT FROM users WHERE role = $1)
-                    if (lower.includes('role = $1') || lower.includes('lower(role) = $1') || lower.includes('role=$1') || lower.includes('lower(role)=$1')) {
-                      return String(r.role || '').toLowerCase().trim() === p0;
-                    }
-                    return rEmail === p0 || rId === p0 || rHostEmail === p0;
-                  });
-                }
-              }
-
-              // Filter by property_id parameter (e.g. property_id = $2)
-              if (params && params.length > 1 && params[1] !== undefined && (lower.includes('property_id = $2') || lower.includes('property_id=$2') || lower.includes('property_id = $1'))) {
-                const pProp = String(params[1]).toLowerCase().trim();
-                rows = rows.filter(r => r && String(r.property_id || '').toLowerCase().trim() === pProp);
-              }
-
-              // Filter by role parameter (e.g. role = $2)
-              if (params && params.length > 1 && params[1] !== undefined && (lower.includes('role = $2') || lower.includes('role=$2'))) {
-                const p1 = String(params[1]).toLowerCase().trim();
-                rows = rows.filter(r => r && String(r.role || '').toLowerCase() === p1);
-              }
-
-              // Filter by host role (e.g. role = 'host')
-              if (lower.includes("role = 'host'") || lower.includes("role='host'") || lower.includes("lower(role) = 'host'") || lower.includes("lower(role)='host'")) {
-                rows = rows.filter(r => r && String(r.role || '').toLowerCase() === 'host');
-              }
-
-              // Filter by hardcoded roles (e.g. role = 'subadmin' OR role = 'admin')
-              if (lower.includes("role = 'subadmin'") || lower.includes("role='subadmin'") || lower.includes("role = 'admin'") || lower.includes("role='admin'")) {
+          // Filter rows if parameters/roles are supplied
+          if (Array.isArray(rows)) {
+            if (params && params.length > 0 && params[0] !== undefined) {
+              const p0 = String(params[0]).toLowerCase().trim();
+              if (lower.includes('where') || lower.includes('$1')) {
                 rows = rows.filter(r => {
-                  const rRole = String(r.role || '').toLowerCase();
-                  const matchSubadmin = lower.includes("role = 'subadmin'") || lower.includes("role='subadmin'");
-                  const matchAdmin = lower.includes("role = 'admin'") || lower.includes("role='admin'");
-                  if (matchSubadmin && matchAdmin) {
-                    return rRole === 'subadmin' || rRole === 'admin';
-                  } else if (matchSubadmin) {
-                    return rRole === 'subadmin';
-                  } else if (matchAdmin) {
-                    return rRole === 'admin';
+                  const rEmail = (r.email || r.user_email || r.applicant_email || r.guest_email || '').toLowerCase().trim();
+                  const rId = (r.id || r.booking_id || r.application_id || r.issue_id || r.error_id || '').toLowerCase().trim();
+                  const rHostEmail = (r.host_email || r.owner_email || '').toLowerCase().trim();
+                  const rPropId = (r.property_id || '').toLowerCase().trim();
+                  // If checking property_id with $1 (e.g. SELECT FROM reviews WHERE property_id = $1)
+                  if (lower.includes('property_id = $1') || lower.includes('property_id=$1')) {
+                    return rPropId === p0;
                   }
-                  return true;
-                });
-              }
-              // Apply descending timestamp ordering if requested
-              if (lower.includes('desc')) {
-                rows.sort((a, b) => {
-                  const timeA = new Date(a.created_at || a.requested_at || a.date || a.timestamp || 0).getTime() ||
-                                (typeof a.id === 'string' && a.id.includes('-') && !isNaN(Number(a.id.split('-')[1])) ? Number(a.id.split('-')[1]) : 0);
-                  const timeB = new Date(b.created_at || b.requested_at || b.date || b.timestamp || 0).getTime() ||
-                                (typeof b.id === 'string' && b.id.includes('-') && !isNaN(Number(b.id.split('-')[1])) ? Number(b.id.split('-')[1]) : 0);
-                  return timeB - timeA;
-                });
-              }
-
-              if (tableName === 'users' && Array.isArray(rows)) {
-                rows = rows.map(u => {
-                  const emailKey = (u.email || '').toLowerCase().trim();
-                  const idKey = String(u.id || '').toLowerCase().trim();
-                  const cachedBank = userBankMap.get(emailKey) || userBankMap.get(idKey);
-                  if (cachedBank) {
-                    return { ...u, ...cachedBank };
+                  // If checking role with $1 (e.g. SELECT FROM users WHERE role = $1)
+                  if (lower.includes('role = $1') || lower.includes('lower(role) = $1') || lower.includes('role=$1') || lower.includes('lower(role)=$1')) {
+                    return String(r.role || '').toLowerCase().trim() === p0;
                   }
-                  return u;
+                  return rEmail === p0 || rId === p0 || rHostEmail === p0;
                 });
               }
             }
 
-            return { rows, rowCount: rows.length };
+            // Filter by property_id parameter (e.g. property_id = $2)
+            if (params && params.length > 1 && params[1] !== undefined && (lower.includes('property_id = $2') || lower.includes('property_id=$2') || lower.includes('property_id = $1'))) {
+              const pProp = String(params[1]).toLowerCase().trim();
+              rows = rows.filter(r => r && String(r.property_id || '').toLowerCase().trim() === pProp);
+            }
+
+            // Filter by role parameter (e.g. role = $2)
+            if (params && params.length > 1 && params[1] !== undefined && (lower.includes('role = $2') || lower.includes('role=$2'))) {
+              const p1 = String(params[1]).toLowerCase().trim();
+              rows = rows.filter(r => r && String(r.role || '').toLowerCase() === p1);
+            }
+
+            // Filter by host role (e.g. role = 'host')
+            if (lower.includes("role = 'host'") || lower.includes("role='host'") || lower.includes("lower(role) = 'host'") || lower.includes("lower(role)='host'")) {
+              rows = rows.filter(r => r && String(r.role || '').toLowerCase() === 'host');
+            }
+
+            // Filter by hardcoded roles (e.g. role = 'subadmin' OR role = 'admin')
+            if (lower.includes("role = 'subadmin'") || lower.includes("role='subadmin'") || lower.includes("role = 'admin'") || lower.includes("role='admin'")) {
+              rows = rows.filter(r => {
+                const rRole = String(r.role || '').toLowerCase();
+                const matchSubadmin = lower.includes("role = 'subadmin'") || lower.includes("role='subadmin'");
+                const matchAdmin = lower.includes("role = 'admin'") || lower.includes("role='admin'");
+                if (matchSubadmin && matchAdmin) {
+                  return rRole === 'subadmin' || rRole === 'admin';
+                } else if (matchSubadmin) {
+                  return rRole === 'subadmin';
+                } else if (matchAdmin) {
+                  return rRole === 'admin';
+                }
+                return true;
+              });
+            }
+            // Apply descending timestamp ordering if requested
+            if (lower.includes('desc')) {
+              rows.sort((a, b) => {
+                const timeA = new Date(a.created_at || a.requested_at || a.date || a.timestamp || 0).getTime() ||
+                              (typeof a.id === 'string' && a.id.includes('-') && !isNaN(Number(a.id.split('-')[1])) ? Number(a.id.split('-')[1]) : 0);
+                const timeB = new Date(b.created_at || b.requested_at || b.date || b.timestamp || 0).getTime() ||
+                              (typeof b.id === 'string' && b.id.includes('-') && !isNaN(Number(b.id.split('-')[1])) ? Number(b.id.split('-')[1]) : 0);
+                return timeB - timeA;
+              });
+            }
+
+            if (tableName === 'users' && Array.isArray(rows)) {
+              rows = rows.map(u => {
+                const emailKey = (u.email || '').toLowerCase().trim();
+                const idKey = String(u.id || '').toLowerCase().trim();
+                const cachedBank = userBankMap.get(emailKey) || userBankMap.get(idKey);
+                if (cachedBank) {
+                  return { ...u, ...cachedBank };
+                }
+                return u;
+              });
+            }
           }
+
+          return { rows, rowCount: rows.length };
         }
       }
 
@@ -292,46 +229,19 @@ export const query = async (text, params = []) => {
           }
         }
 
-        // 2.5 INSERT Users Fallback
+        // 2.5 INSERT / UPSERT Users Fallback
         if (lower.startsWith('insert into users')) {
-          let body = {};
-          if (lower.includes('bank_name') || lower.includes('bank_details')) {
-            body = {
-              id: params[0] || `usr_${Date.now()}`,
-              full_name: params[1] || 'Guest User',
-              email: params[2] || undefined,
-              role: 'guest',
-              verified: true,
-              bank_name: params[3] || null,
-              account_number: params[4] || null,
-              account_holder_name: params[5] || null,
-              ifsc_code: params[6] || null,
-              account_type: params[7] || 'Savings',
-              upi_id: params[8] || null,
-              branch_name: params[9] || null,
-              bank_details: params[10] || null
-            };
-          } else {
-            body = {
-              id: params[0] || `usr_${Date.now()}`,
-              full_name: params[1] || 'Guest User',
-              email: params[2] || undefined,
-              avatar_url: params[3] || null,
-              phone: params[4] || null,
-              role: params[5] || 'guest',
-              provider: params[6] || 'email',
-              verified: params[7] !== undefined ? Boolean(params[7]) : false,
-              password_hash: params[8] || null,
-              bank_name: null,
-              account_number: null,
-              account_holder_name: null,
-              ifsc_code: null,
-              account_type: null,
-              upi_id: null,
-              branch_name: null,
-              bank_details: null
-            };
-          }
+          const body = {
+            id: params[0] || `usr_${Date.now()}`,
+            full_name: params[1] || 'Guest User',
+            email: params[2] ? params[2].trim().toLowerCase() : undefined,
+            avatar_url: params[3] || null,
+            phone: params[4] || null,
+            role: params[5] || 'guest',
+            provider: params[6] || 'email',
+            verified: params[7] !== undefined ? Boolean(params[7]) : false,
+            password_hash: params[8] || null
+          };
 
           let restRes = await fetch(`${SUPABASE_URL}/rest/v1/users`, {
             method: 'POST',
@@ -345,25 +255,8 @@ export const query = async (text, params = []) => {
             const rows = await restRes.json();
             return { rows: Array.isArray(rows) ? rows : [rows], rowCount: 1 };
           } else {
-            const coreBody = {
-              id: body.id,
-              full_name: body.full_name,
-              email: body.email,
-              role: body.role || 'guest',
-              verified: body.verified !== undefined ? Boolean(body.verified) : true
-            };
-            restRes = await fetch(`${SUPABASE_URL}/rest/v1/users`, {
-              method: 'POST',
-              headers: {
-                ...headers,
-                'Prefer': 'resolution=merge-duplicates,return=representation'
-              },
-              body: JSON.stringify(coreBody)
-            });
-            if (restRes.ok) {
-              const rows = await restRes.json();
-              return { rows: Array.isArray(rows) ? rows : [rows], rowCount: 1 };
-            }
+            const errText = await restRes.text().catch(() => '');
+            console.warn('Supabase user insert/upsert error:', restRes.status, errText);
             return { rows: [body], rowCount: 1 };
           }
         }
@@ -448,55 +341,27 @@ export const query = async (text, params = []) => {
 
         // 3. INSERT Properties Fallback
         if (lower.startsWith('insert into properties')) {
-          let body = {};
-          if (params.length >= 10 && typeof params[0] === 'string' && params[0].startsWith('prop-')) {
-            // Parameterized query from propertyRoutes.js:
-            // [propId, finalTitle, finalLocation, finalPrice, finalType, finalDesc, finalImage, finalStatus, finalHostName, finalHostEmail, finalHostPhone, finalFac1, finalFac2, finalFac3, finalRooms]
-            body = {
-              id: params[0],
-              name: params[1] || 'Konkan Stay',
-              title: params[1] || 'Konkan Stay',
-              location: params[2] || 'Konkan Coast, Maharashtra',
-              price: Number(params[3] || 1500),
-              type: params[4] || 'homestay',
-              description: params[5] || 'Authentic Konkan homestay listing.',
-              image: params[6] || '/assets/images/properties/konkan_village_home.png',
-              image_url: params[6] || '/assets/images/properties/konkan_village_home.png',
-              status: params[7] || 'pending',
-              host: params[8] || 'Host',
-              host_name: params[8] || 'Host',
-              host_email: params[9] || 'host@stayinkonkan.com',
-              host_phone: params[10] || '',
-              facility1_image: params[11] || null,
-              facility2_image: params[12] || null,
-              facility3_image: params[13] || null,
-              rooms: (() => {
-                if (!params[14]) return [];
-                if (typeof params[14] === 'string') {
-                  try { return JSON.parse(params[14]); } catch (e) { return []; }
-                }
-                return params[14];
-              })(),
-              rating: 5.0
-            };
-          } else {
-            body = {
-              id: params[0] || `prop-${Date.now()}`,
-              name: params[1] || params[2] || 'Konkan Stay',
-              title: params[2] || params[1] || 'Konkan Stay',
-              host: params[3] || undefined,
-              host_email: params[4] || undefined,
-              host_phone: params[5] || undefined,
-              location: params[6] || params[2] || 'Konkan Coast, Maharashtra',
-              price: Number(params[7] || params[3] || 1500),
-              type: params[8] || params[4] || 'homestay',
-              status: params[9] || params[7] || 'pending',
-              image: params[10] || params[6] || undefined,
-              image_url: params[11] || params[6] || undefined,
-              description: params[12] || params[5] || '',
-              rating: 5.0
-            };
-          }
+          let body = {
+            id: params[0] || `prop-${Date.now()}`,
+            title: params[1] || 'Konkan Stay',
+            description: params[2] || 'Authentic Konkan stay listing.',
+            location: params[3] || 'Konkan Coast, Maharashtra',
+            type: params[4] || 'homestay',
+            price_per_night: Number(params[5] || 1500),
+            image_url: params[6] || '/assets/images/properties/konkan_village_home.png',
+            status: params[7] || 'approved',
+            facility1_image: params[8] || null,
+            facility2_image: params[9] || null,
+            facility3_image: params[10] || null,
+            rooms: (() => {
+              if (!params[11]) return [];
+              if (typeof params[11] === 'string') {
+                try { return JSON.parse(params[11]); } catch (e) { return []; }
+              }
+              return params[11];
+            })(),
+            rating: 4.8
+          };
 
           const restRes = await fetch(`${SUPABASE_URL}/rest/v1/properties`, {
             method: 'POST',
@@ -528,16 +393,13 @@ export const query = async (text, params = []) => {
             id = params[14];
             if (params[15] && typeof params[15] === 'string') titleAlt = params[15];
 
-            if (params[0]) { updateBody.title = params[0]; updateBody.name = params[0]; }
+            if (params[0]) updateBody.title = params[0];
             if (params[1]) updateBody.location = params[1];
-            if (params[2] !== null && params[2] !== undefined) updateBody.price = Number(params[2]);
+            if (params[2] !== null && params[2] !== undefined) updateBody.price_per_night = Number(params[2]);
             if (params[3]) updateBody.type = params[3];
             if (params[4]) updateBody.description = params[4];
-            if (params[5]) { updateBody.image = params[5]; updateBody.image_url = params[5]; }
+            if (params[5]) updateBody.image_url = params[5];
             if (params[6]) updateBody.status = params[6];
-            if (params[7]) { updateBody.host = params[7]; updateBody.host_name = params[7]; }
-            if (params[8]) updateBody.host_email = params[8];
-            if (params[9]) updateBody.host_phone = params[9];
             if (params[10]) updateBody.facility1_image = params[10];
             if (params[11]) updateBody.facility2_image = params[11];
             if (params[12]) updateBody.facility3_image = params[12];

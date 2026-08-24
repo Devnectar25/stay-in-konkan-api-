@@ -197,7 +197,7 @@ router.post('/', async (req, res) => {
   const finalIfsc = ifsc_code || ifscCode || bDetails.ifsc_code || bDetails.ifscCode || '';
   const finalUpi = upi_id || upiId || bDetails.upi_id || bDetails.upiId || '';
 
-  const finalReasonWithBank = attachBankTag(rawReason, {
+  const finalReasonWithBank = attachBankTag(baseReason, {
     bank_name: finalBankName,
     account_holder_name: finalAccountHolder,
     account_number: finalAccountNumber,
