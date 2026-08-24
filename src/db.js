@@ -36,7 +36,10 @@ export async function cleanupCorruptedUserRoles() {
     await pool.query(`UPDATE users SET role = 'guest' WHERE role NOT IN ('admin', 'subadmin', 'host', 'guest');`);
   } catch (e) {}
 }
-cleanupCorruptedUserRoles();
+// Safely run cleanup asynchronously without blocking serverless function cold starts
+if (process.env.NODE_ENV !== 'production') {
+  cleanupCorruptedUserRoles().catch(() => {});
+}
 
 const detectTable = (text) => {
   const lower = text.toLowerCase();
