@@ -71,6 +71,7 @@ router.get('/', async (req, res) => {
     const defaultHostEmails = [
       { id: 'host_kuldeep_mahajan', full_name: 'Kuldeep Mahajan', email: 'mahajankuldeep628@gmail.com', phone: '+91 98224 88776', location: 'Murud, Raigad • Fort & Ocean View' },
       { id: 'host_03', full_name: 'Deep Magare', email: 'deepmagare0@gmail.com', phone: '+91 98221 14455', location: 'Tarkarli, Malvan, Sindhudurg • Beachfront' },
+      { id: 'host_anjali_shewale', full_name: 'Anjali Shewale', email: 'anjalishewale2514@gmail.com', phone: '+91 98225 11223', location: 'Tarkarli, Malvan, Sindhudurg' },
       { id: 'host_admin25', full_name: 'Kuldeep Mahajan', email: 'admin25@gmail.com', phone: '+91 98765 43210', location: 'Murud, Raigad • Fort & Ocean View' },
       { id: 'host_admin26', full_name: 'Kuldeep Mahajan', email: 'admin26@gmail.com', phone: '+91 98765 43210', location: 'Murud, Raigad • Fort & Ocean View' },
       { id: 'host_01', full_name: 'Anand Sawant', email: 'anand.sawant@example.com', phone: '+91-9876543210', location: 'Guhagar, Maharashtra • Near Beach' },
@@ -231,16 +232,26 @@ router.get('/:id/bank-details', async (req, res) => {
       } catch (e) {}
     }
 
+    const cleanBankField = (val) => {
+      if (!val || typeof val !== 'string') return '';
+      const trimmed = val.trim();
+      if (trimmed.includes('@')) return '';
+      return trimmed;
+    };
+
+    const rawBankName = cleanBankField(host.bank_name || parsedBank?.bank_name);
+    const rawAccNo = cleanBankField(host.account_number || parsedBank?.account_number);
+
     const bank_details = {
       account_holder_name: host.account_holder_name || parsedBank?.account_holder_name || host.full_name || '',
-      bank_name: host.bank_name || parsedBank?.bank_name || '',
-      account_number: host.account_number || parsedBank?.account_number || '',
+      bank_name: rawBankName,
+      account_number: rawAccNo,
       ifsc_code: host.ifsc_code || parsedBank?.ifsc_code || '',
       account_type: host.account_type || parsedBank?.account_type || 'Savings',
       upi_id: host.upi_id || parsedBank?.upi_id || '',
       branch_name: host.branch_name || parsedBank?.branch_name || '',
       is_verified: true,
-      is_completed: Boolean(host.account_number || parsedBank?.account_number)
+      is_completed: Boolean(rawAccNo || host.upi_id || parsedBank?.upi_id)
     };
 
     return res.json({
