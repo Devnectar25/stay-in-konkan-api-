@@ -310,7 +310,7 @@ router.get('/full-dashboard', async (req, res) => {
       configRes
     ] = await Promise.all([
       query('SELECT p.*, u.full_name as owner_name, u.email as owner_email FROM properties p LEFT JOIN users u ON p.host_email = u.email ORDER BY p.created_at DESC').catch(() => ({ rows: [] })),
-      query('SELECT id, full_name, email, role, phone, verified, bank_name, account_number, account_holder_name, ifsc_code, account_type, upi_id, branch_name, bank_details, created_at FROM users ORDER BY created_at DESC').catch(() => ({ rows: [] })),
+      query('SELECT * FROM users ORDER BY created_at DESC').catch(() => ({ rows: [] })),
       query('SELECT * FROM bookings ORDER BY created_at DESC').catch(() => ({ rows: [] })),
       query("SELECT * FROM host_applications WHERE LOWER(status) = 'pending' OR status IS NULL ORDER BY created_at DESC").catch(() => ({ rows: [] })),
       query('SELECT * FROM contact_messages ORDER BY created_at DESC').catch(() => ({ rows: [] })),
@@ -402,22 +402,29 @@ router.get('/full-dashboard', async (req, res) => {
 router.get('/properties', async (req, res) => {
   try {
     const { status } = req.query;
-    let sql = `
-      SELECT p.*, u.full_name as owner_name, u.email as owner_email
-      FROM properties p
-      LEFT JOIN users u ON p.host_email = u.email
-    `;
+    let sql = `SELECT * FROM properties`;
     const params = [];
 
     if (status && status !== 'all') {
-      sql += ' WHERE p.status = $1';
+      sql += ' WHERE status = $1';
       params.push(status);
     }
 
-    sql += ' ORDER BY p.created_at DESC';
+    sql += ' ORDER BY created_at DESC';
 
     const dbRes = await query(sql, params);
-    res.json({ success: true, count: dbRes.rows.length, properties: dbRes.rows });
+    const propertiesList = (dbRes.rows || []).map(p => ({
+      ...p,
+      title: p.title || p.name || 'Konkan Homestay',
+      name: p.title || p.name || 'Konkan Homestay',
+      price: Number(p.price || p.price_per_night || 2000),
+      price_per_night: Number(p.price || p.price_per_night || 2000),
+      image: p.image_url || p.image || '/assets/images/properties/konkan_village_home.png',
+      image_url: p.image_url || p.image || '/assets/images/properties/konkan_village_home.png',
+      owner_name: p.owner_name || p.host || p.host_name || 'Registered Host',
+      owner_email: p.owner_email || p.host_email || ''
+    }));
+    return res.json({ success: true, count: propertiesList.length, properties: propertiesList });
   } catch (err) {
     console.warn('[Admin API] Properties DB fallback:', err.message);
     res.json({
@@ -522,7 +529,7 @@ router.delete('/properties/:id', async (req, res) => {
  */
 router.get('/users', async (req, res) => {
   try {
-    const dbRes = await query("SELECT id, full_name, email, role, phone, verified, bank_name, account_number, account_holder_name, ifsc_code, account_type, upi_id, branch_name, bank_details, created_at FROM users ORDER BY created_at DESC");
+    const dbRes = await query("SELECT * FROM users ORDER BY created_at DESC");
     const cleanUsers = (dbRes.rows || []).filter(Boolean);
     res.json({ success: true, count: cleanUsers.length, users: cleanUsers });
   } catch (err) {

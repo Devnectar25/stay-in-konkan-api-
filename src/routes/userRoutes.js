@@ -45,10 +45,11 @@ router.get('/check-email', async (req, res) => {
  * Returns { success, user } or { success: false, reason } with clear diagnostic info.
  */
 router.post('/login', async (req, res) => {
-  const { email, password_hash } = req.body;
+  const { email, password_hash, password } = req.body || {};
+  const targetHash = password_hash || password;
 
-  if (!email || !password_hash) {
-    return res.status(400).json({ success: false, reason: 'EMAIL_OR_HASH_MISSING', message: 'Email and password_hash are required.' });
+  if (!email || !targetHash) {
+    return res.status(400).json({ success: false, reason: 'EMAIL_OR_HASH_MISSING', message: 'Email and password/password_hash are required.' });
   }
 
   try {
@@ -66,7 +67,7 @@ router.post('/login', async (req, res) => {
       return res.status(401).json({ success: false, reason: 'NO_PASSWORD_SET', message: 'No password set for this account. Please use Google/Facebook login or reset your password.' });
     }
 
-    if (user.password_hash !== password_hash) {
+    if (user.password_hash !== targetHash && user.password_hash !== password) {
       return res.status(401).json({ success: false, reason: 'WRONG_PASSWORD', message: 'Incorrect password.' });
     }
 
