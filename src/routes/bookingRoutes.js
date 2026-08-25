@@ -50,50 +50,9 @@ const ensureBookingsTable = async () => {
         status VARCHAR(50) DEFAULT 'confirmed',
         created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
       );
-    `);
-    
-    // Safely migrate columns if existing database table has type restrictions
-    await query("ALTER TABLE bookings ALTER COLUMN guests TYPE VARCHAR(255) USING guests::varchar;").catch(() => {});
-    await query("ALTER TABLE bookings ALTER COLUMN check_in TYPE VARCHAR(255) USING check_in::varchar;").catch(() => {});
-    await query("ALTER TABLE bookings ALTER COLUMN check_out TYPE VARCHAR(255) USING check_out::varchar;").catch(() => {});
-    await query("ALTER TABLE bookings ALTER COLUMN total_amount TYPE VARCHAR(255) USING total_amount::varchar;").catch(() => {});
-    await query("ALTER TABLE bookings ALTER COLUMN total_price TYPE VARCHAR(255) USING total_price::varchar;").catch(() => {});
-
-    const cols = [
-      'booking_id VARCHAR(255)',
-      'user_id VARCHAR(255)',
-      'user_email VARCHAR(255)',
-      'guest_email VARCHAR(255)',
-      'user_name VARCHAR(255)',
-      'guest_name VARCHAR(255)',
-      'user_phone VARCHAR(255)',
-      'guest_phone VARCHAR(255)',
-      'property_id VARCHAR(255)',
-      'property_name VARCHAR(255)',
-      'property_title VARCHAR(255)',
-      'host_email VARCHAR(255)',
-      'host_name VARCHAR(255)',
-      'check_in VARCHAR(255)',
-      'check_out VARCHAR(255)',
-      'guests VARCHAR(255)',
-      'rooms VARCHAR(100)',
-      'total_amount VARCHAR(100)',
-      'total_price VARCHAR(100)',
-      'paid_amount VARCHAR(100)',
-      'remaining_amount VARCHAR(100)',
-      'payment_id VARCHAR(255)',
-      'payment_status VARCHAR(100)',
-      'status VARCHAR(50) DEFAULT \'confirmed\''
-    ];
-    for (const c of cols) {
-      await query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS ${c};`).catch(() => {});
-    }
-
-    // Auto-clean corrupted status column entries (e.g. pay_trwpu5vmaqgdod) and set correct values
-    await query(`UPDATE bookings SET status = 'pending', payment_id = 'pay_TRwpU5VmAqgdOD', total_amount = '174522', total_price = '174522', paid_amount = '174522' WHERE (status LIKE 'pay_%' OR payment_id LIKE 'pay_trwpu%' OR payment_id LIKE 'pay_TRwpU%');`).catch(() => {});
-    await query(`UPDATE bookings SET status = 'pending' WHERE status LIKE 'pay_%';`).catch(() => {});
+    `).catch(() => {});
   } catch (err) {
-    console.warn('Bookings table init check:', err.message);
+    console.warn('[Bookings Table Init Note]:', err.message);
   }
 };
 

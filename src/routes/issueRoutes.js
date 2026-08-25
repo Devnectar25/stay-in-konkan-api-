@@ -7,7 +7,10 @@ const router = express.Router();
 /**
  * Ensures issue table exists in database
  */
+let isIssueTableChecked = false;
 async function ensureIssueTableExists() {
+  if (isIssueTableChecked) return;
+  isIssueTableChecked = true;
   try {
     await query(`
       CREATE TABLE IF NOT EXISTS help_desk (
@@ -26,15 +29,7 @@ async function ensureIssueTableExists() {
         created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
         updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
       );
-    `);
-    
-    try {
-      await query(`ALTER TABLE help_desk ADD COLUMN IF NOT EXISTS comments TEXT DEFAULT '[]';`);
-    } catch (e) {}
-
-    await query(`CREATE INDEX IF NOT EXISTS idx_help_desk_created_at ON help_desk(created_at DESC);`);
-    await query(`CREATE INDEX IF NOT EXISTS idx_help_desk_status ON help_desk(status);`);
-    await query(`CREATE INDEX IF NOT EXISTS idx_help_desk_priority ON help_desk(priority);`);
+    `).catch(() => {});
   } catch (err) {
     console.warn('[Help Desk Table Init Note]:', err.message);
   }
@@ -75,8 +70,8 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ success: false, message: 'Issue title is required.' });
     }
 
-    const uuid = crypto.randomUUID();
-    const issueId = generateIssueId();
+    const uuid = req.body.id || req.body.uuid || crypto.randomUUID();
+    const issueId = req.body.issue_id || req.body.issueId || generateIssueId();
     const cleanTitle = title.trim();
     const cleanDesc = description ? description.trim() : '';
     const cleanCategory = category || 'General';
@@ -88,6 +83,16 @@ router.post('/', async (req, res) => {
         id, issue_id, title, description, category, user_name, user_email,
         user_phone, priority, status, admin_notes, created_at, updated_at
       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), NOW())
+      ON CONFLICT (id) DO UPDATE SET
+        title = EXCLUDED.title,
+        description = EXCLUDED.description,
+        category = EXCLUDED.category,
+        user_name = EXCLUDED.user_name,
+        user_email = EXCLUDED.user_email,
+        user_phone = EXCLUDED.user_phone,
+        priority = EXCLUDED.priority,
+        status = EXCLUDED.status,
+        updated_at = NOW()
       RETURNING *;
     `;
 

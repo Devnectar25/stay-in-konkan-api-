@@ -125,14 +125,6 @@ router.post('/sync', async (req, res) => {
       );
     `).catch(() => {});
 
-    await query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash TEXT;`).catch(() => {});
-
-    // Auto-clean any email addresses mistakenly written to bank_name / account_number in database
-    await query(`UPDATE users SET bank_name = NULL WHERE bank_name LIKE '%@%';`).catch(() => {});
-    await query(`UPDATE users SET account_number = NULL WHERE account_number LIKE '%@%';`).catch(() => {});
-    await query(`UPDATE hosts SET bank_name = NULL WHERE bank_name LIKE '%@%';`).catch(() => {});
-    await query(`UPDATE hosts SET account_number = NULL WHERE account_number LIKE '%@%';`).catch(() => {});
-
     const rawSql = `
       INSERT INTO users (id, full_name, email, avatar_url, phone, role, provider, verified, password_hash, updated_at)
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW())
@@ -440,12 +432,42 @@ router.put('/:id/bank-details', async (req, res) => {
         account_number,
         ifsc_code,
         account_type: account_type || 'Savings',
-        upi_id,
-        branch_name
       }
     });
   } catch (error) {
-    console.error('Update user bank details error:', error);
+    console.error('Error saving user bank details:', error);
+    return res.status(500).json({ success: false, message: error.message || 'Internal server error' });
+  }
+});
+
+/**
+ * DELETE /api/users/:id/bank-details
+ */
+router.delete('/:id/bank-details', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const emailKey = String(id).toLowerCase().trim();
+
+    await query(
+      `UPDATE users SET bank_name=NULL, account_number=NULL, account_holder_name=NULL, ifsc_code=NULL, account_type=NULL, upi_id=NULL, branch_name=NULL, bank_details=NULL, updated_at=NOW()
+       WHERE id=$1 OR LOWER(email)=$2;`,
+      [id, emailKey]
+    );
+
+    await query(
+      `UPDATE hosts SET bank_name=NULL, account_number=NULL, account_holder_name=NULL, ifsc_code=NULL, account_type=NULL, upi_id=NULL, branch_name=NULL, bank_details=NULL, updated_at=NOW()
+       WHERE id=$1 OR LOWER(email)=$2;`,
+      [id, emailKey]
+    ).catch(() => {});
+
+    await query(
+      `DELETE FROM bank_details WHERE id=$1 OR LOWER(user_email)=$2;`,
+      [id, emailKey]
+    ).catch(() => {});
+
+    return res.json({ success: true, message: 'User bank details deleted successfully across database' });
+  } catch (error) {
+    console.error('Delete user bank details error:', error);
     return res.status(500).json({ success: false, message: error.message || 'Database error' });
   }
 });

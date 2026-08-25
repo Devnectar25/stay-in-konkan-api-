@@ -521,7 +521,39 @@ router.put('/:id/bank-details', async (req, res) => {
     });
   } catch (error) {
     console.error('Update bank details error:', error);
-    return res.status(500).json({ success: false, message: error.message || 'Failed to update bank details' });
+    return res.status(500).json({ success: false, message: error.message || 'Internal server error' });
+  }
+});
+
+/**
+ * DELETE /api/hosts/:id/bank-details
+ */
+router.delete('/:id/bank-details', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const emailKey = String(id).toLowerCase().trim();
+
+    await query(
+      `UPDATE hosts SET bank_name=NULL, account_number=NULL, account_holder_name=NULL, ifsc_code=NULL, account_type=NULL, upi_id=NULL, branch_name=NULL, bank_details=NULL, updated_at=NOW()
+       WHERE id=$1 OR LOWER(email)=$2;`,
+      [id, emailKey]
+    );
+
+    await query(
+      `UPDATE users SET bank_name=NULL, account_number=NULL, account_holder_name=NULL, ifsc_code=NULL, account_type=NULL, upi_id=NULL, branch_name=NULL, bank_details=NULL, updated_at=NOW()
+       WHERE id=$1 OR LOWER(email)=$2;`,
+      [id, emailKey]
+    ).catch(() => {});
+
+    await query(
+      `DELETE FROM bank_details WHERE id=$1 OR LOWER(user_email)=$2;`,
+      [id, emailKey]
+    ).catch(() => {});
+
+    return res.json({ success: true, message: 'Host bank details deleted successfully across database' });
+  } catch (error) {
+    console.error('Delete host bank details error:', error);
+    return res.status(500).json({ success: false, message: error.message || 'Database error' });
   }
 });
 

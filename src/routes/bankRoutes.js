@@ -283,25 +283,7 @@ async function ensureBankDetailsTable() {
         created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
       );
-    `);
-
-    // Check count and seed if empty
-    const checkRes = await query('SELECT COUNT(*) as count FROM bank_details');
-    const count = parseInt(checkRes.rows[0]?.count || 0, 10);
-    if (count === 0) {
-      for (const item of SEED_BANK_DETAILS) {
-        await query(
-          `INSERT INTO bank_details (id, user_email, account_holder_name, user_type, bank_name, account_number, ifsc_code, upi_id, branch_name, account_type, is_primary, verified_status)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-           ON CONFLICT (id) DO NOTHING`,
-          [
-            item.id, item.user_email, item.account_holder_name, item.user_type,
-            item.bank_name, item.account_number, item.ifsc_code, item.upi_id,
-            item.branch_name, item.account_type, item.is_primary, item.verified_status
-          ]
-        );
-      }
-    }
+    `).catch(() => {});
   } catch (err) {
     console.warn('[BankDetails Table Init Notice]:', err.message);
   }
@@ -526,12 +508,46 @@ router.delete('/:id', async (req, res) => {
   try {
     await ensureBankDetailsTable();
     const { id } = req.params;
+    const emailKey = String(id).toLowerCase().trim();
 
-    await query('DELETE FROM bank_details WHERE id = $1 OR user_email = $1', [id]);
+    // 1. Delete from bank_details table
+    await query('DELETE FROM bank_details WHERE id = $1 OR user_email = $1 OR LOWER(user_email) = $2 OR LOWER(id) = $2', [id, emailKey]);
+
+    // 2. Clear bank details in users table
+    await query(
+      `UPDATE users SET
+        bank_name = NULL,
+        account_number = NULL,
+        account_holder_name = NULL,
+        ifsc_code = NULL,
+        account_type = NULL,
+        upi_id = NULL,
+        branch_name = NULL,
+        bank_details = NULL,
+        updated_at = NOW()
+       WHERE email = $1 OR LOWER(email) = $2 OR id = $1;`,
+      [id, emailKey]
+    ).catch(() => {});
+
+    // 3. Clear bank details in hosts table
+    await query(
+      `UPDATE hosts SET
+        bank_name = NULL,
+        account_number = NULL,
+        account_holder_name = NULL,
+        ifsc_code = NULL,
+        account_type = NULL,
+        upi_id = NULL,
+        branch_name = NULL,
+        bank_details = NULL,
+        updated_at = NOW()
+       WHERE email = $1 OR LOWER(email) = $2 OR id = $1;`,
+      [id, emailKey]
+    ).catch(() => {});
 
     res.json({
       success: true,
-      message: `Bank details for "${id}" deleted successfully`
+      message: `Bank details for "${id}" deleted successfully across all database tables.`
     });
   } catch (error) {
     console.error('Error deleting bank details:', error);
