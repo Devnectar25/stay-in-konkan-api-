@@ -40,7 +40,7 @@ router.post('/', async (req, res) => {
       console.warn("Alter table contact_messages warning:", e.message);
     }
 
-    // 2. Insert into PostgreSQL
+    // 2. Insert into PostgreSQL contact_messages table
     const rawSql = `
       INSERT INTO contact_messages (id, name, email, phone, subject, message, unread, created_at)
       VALUES ($1, $2, $3, $4, $5, $6, TRUE, NOW())
@@ -49,9 +49,54 @@ router.post('/', async (req, res) => {
     const params = [uuid, name.trim(), email.trim().toLowerCase(), phone ? phone.trim() : null, subject || 'General Inquiry', message.trim()];
     const result = await query(rawSql, params);
 
+    // 3. Dual-sync to help_desk table in PostgreSQL
+    try {
+      const issueId = `TK-${Math.floor(100000 + Math.random() * 900000)}`;
+      await query(`
+        CREATE TABLE IF NOT EXISTS help_desk (
+          id VARCHAR(255) PRIMARY KEY,
+          issue_id VARCHAR(255) UNIQUE NOT NULL,
+          title VARCHAR(255) NOT NULL,
+          description TEXT,
+          category VARCHAR(100) DEFAULT 'General',
+          user_name VARCHAR(255),
+          user_email VARCHAR(255),
+          user_phone VARCHAR(50),
+          priority VARCHAR(50) DEFAULT 'Medium',
+          status VARCHAR(50) DEFAULT 'Open',
+          admin_notes TEXT,
+          comments TEXT DEFAULT '[]',
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+          updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+        );
+      `).catch(() => {});
+
+      await query(`
+        INSERT INTO help_desk (
+          id, issue_id, title, description, category, user_name, user_email,
+          user_phone, priority, status, admin_notes, created_at, updated_at
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), NOW())
+        ON CONFLICT (id) DO NOTHING;
+      `, [
+        uuid,
+        issueId,
+        subject || 'Help Desk Contact Inquiry',
+        message.trim(),
+        'General Inquiry',
+        name.trim(),
+        email.trim().toLowerCase(),
+        phone ? phone.trim() : null,
+        'Medium',
+        'Open',
+        'Your issue is sent to our team. Our team will review it and contact you soon.'
+      ]);
+    } catch (hdErr) {
+      console.warn('[Contact to HelpDesk sync note]:', hdErr.message);
+    }
+
     return res.json({
       success: true,
-      message: 'Contact message saved successfully to database!',
+      message: 'Contact message & Help Desk ticket saved successfully to database!',
       data: result.rows[0]
     });
   } catch (error) {
