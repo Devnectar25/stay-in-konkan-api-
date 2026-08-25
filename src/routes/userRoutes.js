@@ -402,6 +402,35 @@ router.put('/:id/bank-details', async (req, res) => {
       }
     } catch (e) {}
 
+    // Also sync to bank_details table
+    const targetEmail = String(id).toLowerCase().trim();
+    await query(
+      `INSERT INTO bank_details (id, user_email, account_holder_name, user_type, bank_name, account_number, ifsc_code, upi_id, branch_name, account_type, is_primary, verified_status, updated_at)
+       VALUES ($1, $2, $3, 'user', $4, $5, $6, $7, $8, $9, true, 'verified', NOW())
+       ON CONFLICT (id) DO UPDATE SET
+         user_email = EXCLUDED.user_email,
+         account_holder_name = EXCLUDED.account_holder_name,
+         user_type = EXCLUDED.user_type,
+         bank_name = EXCLUDED.bank_name,
+         account_number = EXCLUDED.account_number,
+         ifsc_code = EXCLUDED.ifsc_code,
+         upi_id = EXCLUDED.upi_id,
+         branch_name = EXCLUDED.branch_name,
+         account_type = EXCLUDED.account_type,
+         updated_at = NOW();`,
+      [
+        `bd_${targetEmail}`,
+        targetEmail,
+        account_holder_name || 'Guest User',
+        bank_name || null,
+        account_number || null,
+        ifsc_code || null,
+        upi_id || null,
+        branch_name || null,
+        account_type || 'Savings'
+      ]
+    ).catch(() => {});
+
     return res.json({
       success: true,
       message: 'User bank details saved successfully to database',

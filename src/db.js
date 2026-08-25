@@ -216,7 +216,10 @@ export const query = async (text, params = []) => {
             property_doc_name: params[9] || undefined,
             gst_doc_name: params[10] || undefined,
             identity_doc_name: params[11] || undefined,
-            status: params[12] || 'pending'
+            property_doc_url: params[12] || undefined,
+            gst_doc_url: params[13] || undefined,
+            identity_doc_url: params[14] || undefined,
+            status: params[15] || 'pending'
           };
           const restRes = await fetch(`${SUPABASE_URL}/rest/v1/host_applications`, {
             method: 'POST',

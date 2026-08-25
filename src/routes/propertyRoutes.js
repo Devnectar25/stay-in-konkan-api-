@@ -39,7 +39,7 @@ router.get('/', async (req, res) => {
       console.warn('Auto-repair property titles note:', e);
     }
 
-    let rawSql = `SELECT * FROM properties WHERE status IS NULL OR status != 'rejected'`;
+    let rawSql = `SELECT * FROM properties WHERE status IS NULL OR LOWER(status) != 'rejected'`;
     const params = [];
 
     if (location) {
@@ -340,8 +340,8 @@ router.put('/:id', async (req, res) => {
     const rawSql = `
       UPDATE properties
       SET 
-        title = COALESCE(NULLIF($1, ''), NULLIF(title, 'EMPTY'), NULLIF(name, 'EMPTY'), 'Konkan Stay'),
-        name = COALESCE(NULLIF($1, ''), NULLIF(name, 'EMPTY'), NULLIF(title, 'EMPTY'), 'Konkan Stay'),
+        title = COALESCE(NULLIF($1, ''), NULLIF(title, 'EMPTY'), NULLIF(name, 'EMPTY'), title),
+        name = COALESCE(NULLIF($1, ''), NULLIF(name, 'EMPTY'), NULLIF(title, 'EMPTY'), name),
         location = COALESCE(NULLIF($2, ''), location),
         price = CASE WHEN $3 IS NOT NULL AND $3 > 0 THEN $3 ELSE COALESCE(price, 1500) END,
         type = COALESCE(NULLIF($4, ''), type),
