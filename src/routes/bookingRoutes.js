@@ -25,6 +25,7 @@ const ensureBookingsTable = async () => {
       CREATE TABLE IF NOT EXISTS bookings (
         id VARCHAR(255) PRIMARY KEY,
         booking_id VARCHAR(255),
+        user_id VARCHAR(255),
         user_email VARCHAR(255),
         guest_email VARCHAR(255),
         user_name VARCHAR(255),
@@ -38,43 +39,58 @@ const ensureBookingsTable = async () => {
         host_name VARCHAR(255),
         check_in VARCHAR(255),
         check_out VARCHAR(255),
-        guests VARCHAR(100),
+        guests VARCHAR(255),
+        rooms VARCHAR(100),
         total_amount VARCHAR(100),
         total_price VARCHAR(100),
         paid_amount VARCHAR(100),
         remaining_amount VARCHAR(100),
         payment_id VARCHAR(255),
+        payment_status VARCHAR(100),
         status VARCHAR(50) DEFAULT 'confirmed',
         created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
       );
     `);
+    
+    // Safely migrate columns if existing database table has type restrictions
+    await query("ALTER TABLE bookings ALTER COLUMN guests TYPE VARCHAR(255) USING guests::varchar;").catch(() => {});
+    await query("ALTER TABLE bookings ALTER COLUMN check_in TYPE VARCHAR(255) USING check_in::varchar;").catch(() => {});
+    await query("ALTER TABLE bookings ALTER COLUMN check_out TYPE VARCHAR(255) USING check_out::varchar;").catch(() => {});
+    await query("ALTER TABLE bookings ALTER COLUMN total_amount TYPE VARCHAR(255) USING total_amount::varchar;").catch(() => {});
+    await query("ALTER TABLE bookings ALTER COLUMN total_price TYPE VARCHAR(255) USING total_price::varchar;").catch(() => {});
+
     const cols = [
       'booking_id VARCHAR(255)',
+      'user_id VARCHAR(255)',
       'user_email VARCHAR(255)',
+      'guest_email VARCHAR(255)',
       'user_name VARCHAR(255)',
+      'guest_name VARCHAR(255)',
       'user_phone VARCHAR(255)',
+      'guest_phone VARCHAR(255)',
       'property_id VARCHAR(255)',
       'property_name VARCHAR(255)',
+      'property_title VARCHAR(255)',
       'host_email VARCHAR(255)',
       'host_name VARCHAR(255)',
+      'check_in VARCHAR(255)',
+      'check_out VARCHAR(255)',
+      'guests VARCHAR(255)',
+      'rooms VARCHAR(100)',
       'total_amount VARCHAR(100)',
+      'total_price VARCHAR(100)',
       'paid_amount VARCHAR(100)',
       'remaining_amount VARCHAR(100)',
       'payment_id VARCHAR(255)',
-      'status VARCHAR(50) DEFAULT \'confirmed\'',
-      'rooms INT4 DEFAULT 1'
+      'payment_status VARCHAR(100)',
+      'status VARCHAR(50) DEFAULT \'confirmed\''
     ];
     for (const c of cols) {
       await query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS ${c};`).catch(() => {});
     }
 
-    // Auto-backfill existing bookings with room counts derived from guests string or property_name
-    await query(`UPDATE bookings SET rooms = 2 WHERE (guests LIKE '%2 Room%' OR guests LIKE '%2 room%' OR property_name LIKE '%2 Room%') AND (rooms IS NULL OR rooms = 1);`).catch(() => {});
-    await query(`UPDATE bookings SET rooms = 3 WHERE (guests LIKE '%3 Room%' OR guests LIKE '%3 room%' OR property_name LIKE '%3 Room%') AND (rooms IS NULL OR rooms = 1);`).catch(() => {});
-    await query(`UPDATE bookings SET rooms = 4 WHERE (guests LIKE '%4 Room%' OR guests LIKE '%4 room%' OR property_name LIKE '%4 Room%') AND (rooms IS NULL OR rooms = 1);`).catch(() => {});
-
     // Auto-clean corrupted status column entries (e.g. pay_trwpu5vmaqgdod) and set correct values
-    await query(`UPDATE bookings SET status = 'pending', payment_id = 'pay_TRwpU5VmAqgdOD', total_amount = '174522', total_price = 174522, paid_amount = '174522' WHERE (status LIKE 'pay_%' OR payment_id LIKE 'pay_trwpu%' OR payment_id LIKE 'pay_TRwpU%');`).catch(() => {});
+    await query(`UPDATE bookings SET status = 'pending', payment_id = 'pay_TRwpU5VmAqgdOD', total_amount = '174522', total_price = '174522', paid_amount = '174522' WHERE (status LIKE 'pay_%' OR payment_id LIKE 'pay_trwpu%' OR payment_id LIKE 'pay_TRwpU%');`).catch(() => {});
     await query(`UPDATE bookings SET status = 'pending' WHERE status LIKE 'pay_%';`).catch(() => {});
   } catch (err) {
     console.warn('Bookings table init check:', err.message);
@@ -87,7 +103,7 @@ const ensureBookingsTable = async () => {
  */
 router.post('/', async (req, res) => {
   const { 
-    id, booking_id, user_email, guest_email, user_name, guest_name, user_phone, guest_phone, 
+    id, booking_id, user_id, user_email, guest_email, user_name, guest_name, user_phone, guest_phone, 
     property_id, property_name, property_title, host_email, host_name, check_in, check_out, guests, 
     rooms, roomsCount, rooms_count, total_amount, total_price, paid_amount, payment_status, status, payment_id 
   } = req.body;
@@ -96,6 +112,7 @@ router.post('/', async (req, res) => {
 
   const finalBookingId = booking_id || id || `SIK-${Math.floor(100000 + Math.random() * 900000)}`;
   const primaryId = id || booking_id || finalBookingId;
+  const userIdVal = user_id || req.body.userId || 'guest_user';
 
   const totalVal = Number(total_amount || total_price || 0);
   const paidVal = Number(paid_amount || totalVal);
@@ -134,6 +151,7 @@ router.post('/', async (req, res) => {
 
   const finalStatus = (status || 'pending').trim().toLowerCase();
   const finalPaymentId = (payment_id || '').trim();
+  const finalPaymentStatus = (payment_status || 'completed').trim().toLowerCase();
 
   try {
     const rawSql = `
@@ -144,14 +162,10 @@ router.post('/', async (req, res) => {
       ON CONFLICT (id) DO UPDATE SET
         booking_id = EXCLUDED.booking_id,
         user_email = EXCLUDED.user_email,
-        guest_email = EXCLUDED.guest_email,
         user_name = EXCLUDED.user_name,
-        guest_name = EXCLUDED.guest_name,
         user_phone = EXCLUDED.user_phone,
-        guest_phone = EXCLUDED.guest_phone,
         property_id = EXCLUDED.property_id,
         property_name = EXCLUDED.property_name,
-        property_title = EXCLUDED.property_title,
         host_email = EXCLUDED.host_email,
         host_name = EXCLUDED.host_name,
         check_in = EXCLUDED.check_in,
@@ -159,7 +173,6 @@ router.post('/', async (req, res) => {
         guests = EXCLUDED.guests,
         rooms = EXCLUDED.rooms,
         total_amount = EXCLUDED.total_amount,
-        total_price = EXCLUDED.total_price,
         paid_amount = EXCLUDED.paid_amount,
         remaining_amount = EXCLUDED.remaining_amount,
         payment_id = EXCLUDED.payment_id,

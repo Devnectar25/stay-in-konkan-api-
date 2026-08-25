@@ -54,60 +54,128 @@ const ensureHostsTable = async () => {
  */
 router.get('/', async (req, res) => {
   try {
-    const usersRes = await query(`
-      SELECT id, full_name, email, phone, role, verified, created_at 
-      FROM users 
-      WHERE LOWER(role) IN ('host', 'owner', 'admin') 
-         OR email IN (SELECT DISTINCT host_email FROM properties WHERE host_email IS NOT NULL AND host_email != '')
-      ORDER BY created_at ASC;
-    `).catch(() => ({ rows: [] }));
+    await ensureHostsTable();
 
-    const propsRes = await query(`SELECT id, title, host, host_email, location FROM properties;`).catch(() => ({ rows: [] }));
+    // 1. Fetch from hosts table
+    const hostsRes = await query(`SELECT * FROM hosts;`).catch(() => ({ rows: [] }));
+    const dbHosts = hostsRes.rows || [];
+
+    // 2. Fetch from users table (hosts / owners)
+    const usersRes = await query(`
+      SELECT id, full_name, email, phone, role, verified, status, created_at, location, bank_name, account_number, account_holder_name, ifsc_code, upi_id
+      FROM users 
+      WHERE LOWER(role) IN ('host', 'owner') 
+         OR email IN (SELECT DISTINCT host_email FROM properties WHERE host_email IS NOT NULL AND host_email != '')
+      ORDER BY created_at DESC;
+    `).catch(() => ({ rows: [] }));
+    const dbUsers = usersRes.rows || [];
+
+    // 3. Fetch from approved host_applications table
+    const appsRes = await query(`
+      SELECT id, applicant_name as full_name, applicant_email as email, phone, location, created_at, status
+      FROM host_applications 
+      WHERE LOWER(status) = 'approved'
+      ORDER BY created_at DESC;
+    `).catch(() => ({ rows: [] }));
+    const dbApps = appsRes.rows || [];
+
+    // 4. Fetch properties to associate property counts and location
+    const propsRes = await query(`SELECT id, title, host, host_name, host_email, host_phone, location FROM properties;`).catch(() => ({ rows: [] }));
     const props = propsRes.rows || [];
 
-    let usersList = usersRes.rows || [];
-    
-    // Ensure default hosts are present in the list if not in users table
-    const defaultHostEmails = [
-      { id: 'host_kuldeep_mahajan', full_name: 'Kuldeep Mahajan', email: 'mahajankuldeep628@gmail.com', phone: '+91 98224 88776', location: 'Murud, Raigad • Fort & Ocean View' },
-      { id: 'host_03', full_name: 'Deep Magare', email: 'deepmagare0@gmail.com', phone: '+91 98221 14455', location: 'Tarkarli, Malvan, Sindhudurg • Beachfront' },
-      { id: 'host_anjali_shewale', full_name: 'Anjali Shewale', email: 'anjalishewale2514@gmail.com', phone: '+91 98225 11223', location: 'Tarkarli, Malvan, Sindhudurg' },
-      { id: 'host_admin25', full_name: 'Kuldeep Mahajan', email: 'admin25@gmail.com', phone: '+91 98765 43210', location: 'Murud, Raigad • Fort & Ocean View' },
-      { id: 'host_admin26', full_name: 'Kuldeep Mahajan', email: 'admin26@gmail.com', phone: '+91 98765 43210', location: 'Murud, Raigad • Fort & Ocean View' },
-      { id: 'host_01', full_name: 'Anand Sawant', email: 'anand.sawant@example.com', phone: '+91-9876543210', location: 'Guhagar, Maharashtra • Near Beach' },
-      { id: 'host_02', full_name: 'Sanjay Kulkarni', email: 'sanjay.k@example.com', phone: '+91-9123456789', location: 'Ratnagiri, Maharashtra • Orchard' }
+    // Default system hosts fallback
+    const defaultHosts = [
+      { id: 'host_kuldeep_mahajan', full_name: 'Kuldeep Mahajan', email: 'mahajankuldeep628@gmail.com', phone: '+91 98224 88776', location: 'Murud, Raigad • Fort & Ocean View', created_at: '2026-08-22T10:00:00.000Z' },
+      { id: 'host_03', full_name: 'Deep Magare', email: 'deepmagare0@gmail.com', phone: '+91 98221 14455', location: 'Tarkarli, Malvan, Sindhudurg • Beachfront', created_at: '2026-08-21T12:00:00.000Z' },
+      { id: 'host_anjali_shewale', full_name: 'Anjali Shewale', email: 'anjalishewale2514@gmail.com', phone: '+91 98225 11223', location: 'Tarkarli, Malvan, Sindhudurg', created_at: '2026-08-20T10:00:00.000Z' },
+      { id: 'host_admin25', full_name: 'Kuldeep Mahajan', email: 'admin25@gmail.com', phone: '+91 98765 43210', location: 'Murud, Raigad • Fort & Ocean View', created_at: '2026-08-19T08:30:00.000Z' },
+      { id: 'host_admin26', full_name: 'Kuldeep Mahajan', email: 'admin26@gmail.com', phone: '+91 98765 43210', location: 'Murud, Raigad • Fort & Ocean View', created_at: '2026-08-19T08:35:00.000Z' },
+      { id: 'host_01', full_name: 'Anand Sawant', email: 'anand.sawant@example.com', phone: '+91-9876543210', location: 'Guhagar, Maharashtra • Near Beach', created_at: '2026-08-14T09:40:00.000Z' },
+      { id: 'host_02', full_name: 'Sanjay Kulkarni', email: 'sanjay.k@example.com', phone: '+91-9123456789', location: 'Ratnagiri, Maharashtra • Orchard', created_at: '2026-08-14T09:45:00.000Z' }
     ];
 
-    const existingEmails = new Set(usersList.map(u => (u.email || '').toLowerCase().trim()));
-    defaultHostEmails.forEach(dh => {
-      if (!existingEmails.has(dh.email.toLowerCase().trim())) {
-        usersList.push(dh);
+    const hostMap = new Map();
+
+    // Fill map from defaultHosts
+    defaultHosts.forEach(dh => {
+      if (dh && dh.email) hostMap.set(dh.email.toLowerCase().trim(), dh);
+    });
+
+    // Fill map from dbApps
+    dbApps.forEach(app => {
+      if (app && app.email) {
+        const key = app.email.toLowerCase().trim();
+        const existing = hostMap.get(key) || {};
+        hostMap.set(key, { ...existing, ...app, status: 'active', verified: true });
       }
     });
 
-    const hosts = usersList.map(u => {
-      const email = (u.email || '').toLowerCase().trim();
-      const name = (u.full_name || '').toLowerCase().trim();
+    // Fill map from dbUsers
+    dbUsers.forEach(u => {
+      if (u && u.email) {
+        const key = u.email.toLowerCase().trim();
+        const existing = hostMap.get(key) || {};
+        hostMap.set(key, { ...existing, ...u });
+      }
+    });
+
+    // Fill map from dbHosts (highest precedence table for host attributes)
+    dbHosts.forEach(h => {
+      if (h && h.email) {
+        const key = h.email.toLowerCase().trim();
+        const existing = hostMap.get(key) || {};
+        hostMap.set(key, { ...existing, ...h });
+      }
+    });
+
+    // Also collect hosts directly listed in properties table
+    props.forEach(p => {
+      const pEmail = (p.host_email || '').toLowerCase().trim();
+      if (pEmail && pEmail !== 'homestay' && pEmail !== 'host@stayinkonkan.com' && !hostMap.has(pEmail)) {
+        hostMap.set(pEmail, {
+          id: `host_${pEmail.replace(/[^a-zA-Z0-9]/g, '_')}`,
+          full_name: p.host_name || p.host || pEmail.split('@')[0],
+          email: pEmail,
+          phone: p.host_phone || '+91 98765 43210',
+          location: p.location || 'Konkan Region',
+          verified: true,
+          status: 'active',
+          created_at: new Date().toISOString()
+        });
+      }
+    });
+
+    const allHostsList = Array.from(hostMap.values()).map(h => {
+      const email = (h.email || '').toLowerCase().trim();
+      const name = (h.full_name || h.name || '').toLowerCase().trim();
+
       const matchingProps = props.filter(p => {
         const pEmail = (p.host_email || '').toLowerCase().trim();
-        const pName = (p.host || '').toLowerCase().trim();
+        const pName = (p.host || p.host_name || '').toLowerCase().trim();
         return (email && pEmail === email) || (name && pName === name);
       });
 
       return {
-        id: u.id || `host_${email.replace(/[^a-zA-Z0-9]/g, '_')}`,
-        full_name: u.full_name || email.split('@')[0],
-        email: u.email,
-        phone: u.phone || (email === 'mahajankuldeep628@gmail.com' ? '+91 98224 88776' : (email === 'deepmagare0@gmail.com' ? '+91 98221 14455' : '+91 98765 43210')),
-        location: u.location || matchingProps[0]?.location || 'Konkan Region',
+        id: h.id || `host_${email.replace(/[^a-zA-Z0-9]/g, '_')}`,
+        full_name: h.full_name || h.name || email.split('@')[0],
+        email: h.email,
+        phone: h.phone || '+91 98765 43210',
+        location: h.location || matchingProps[0]?.location || 'Konkan Region',
         total_properties: matchingProps.length,
-        verified: u.verified !== false,
-        status: 'active',
-        created_at: u.created_at || new Date().toISOString()
+        verified: h.verified !== false,
+        status: h.status || 'active',
+        created_at: h.created_at || new Date().toISOString()
       };
     });
 
-    return res.json({ success: true, count: hosts.length, hosts });
+    // Sort NEWEST / LATEST hosts first (descending timestamp)
+    allHostsList.sort((a, b) => {
+      const timeA = new Date(a.created_at || 0).getTime();
+      const timeB = new Date(b.created_at || 0).getTime();
+      return timeB - timeA;
+    });
+
+    return res.json({ success: true, count: allHostsList.length, hosts: allHostsList });
   } catch (error) {
     console.error('Fetch hosts error:', error);
     return res.status(500).json({ success: false, message: error.message || 'Database error' });
@@ -407,6 +475,35 @@ router.put('/:id/bank-details', async (req, res) => {
            ifsc_code = COALESCE($4, ifsc_code)
        WHERE LOWER(email) = LOWER($5) OR LOWER(applicant_email) = LOWER($5);`,
       [bank_name || null, account_number || null, account_holder_name || null, ifsc_code || null, id]
+    ).catch(() => {});
+
+    // Also sync to bank_details table
+    const targetEmail = String(id).toLowerCase().trim();
+    await query(
+      `INSERT INTO bank_details (id, user_email, account_holder_name, user_type, bank_name, account_number, ifsc_code, upi_id, branch_name, account_type, is_primary, verified_status, updated_at)
+       VALUES ($1, $2, $3, 'host', $4, $5, $6, $7, $8, $9, true, 'verified', NOW())
+       ON CONFLICT (id) DO UPDATE SET
+         user_email = EXCLUDED.user_email,
+         account_holder_name = EXCLUDED.account_holder_name,
+         user_type = EXCLUDED.user_type,
+         bank_name = EXCLUDED.bank_name,
+         account_number = EXCLUDED.account_number,
+         ifsc_code = EXCLUDED.ifsc_code,
+         upi_id = EXCLUDED.upi_id,
+         branch_name = EXCLUDED.branch_name,
+         account_type = EXCLUDED.account_type,
+         updated_at = NOW();`,
+      [
+        `bd_${targetEmail}`,
+        targetEmail,
+        account_holder_name || 'Host User',
+        bank_name || null,
+        account_number || null,
+        ifsc_code || null,
+        upi_id || null,
+        branch_name || null,
+        account_type || 'Savings'
+      ]
     ).catch(() => {});
 
     return res.json({

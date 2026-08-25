@@ -579,17 +579,27 @@ router.put('/users/:id', async (req, res) => {
   const id = rawId;
 
   try {
-    // 1. Update PostgreSQL users table
+    // 1. Update or Upsert PostgreSQL users table
     try {
       if (role !== undefined) {
         let cleanRole = 'guest';
         const rStr = String(role).toLowerCase().trim();
         if (rStr === 'host' || rStr === 'admin' || rStr === 'subadmin') cleanRole = rStr;
         else if (rStr.includes('subadmin')) cleanRole = 'subadmin';
-        await query(
-          'UPDATE users SET role = $1, updated_at = NOW() WHERE LOWER(email) = LOWER($2) OR id::text = $3',
+
+        const updateRes = await query(
+          'UPDATE users SET role = $1, updated_at = NOW() WHERE LOWER(email) = LOWER($2) OR id::text = $3 RETURNING *',
           [cleanRole, targetEmail || id, id]
         );
+
+        if ((!updateRes || !updateRes.rows || updateRes.rows.length === 0) && targetEmail) {
+          await query(
+            `INSERT INTO users (id, full_name, email, role, verified, created_at, updated_at)
+             VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
+             ON CONFLICT (email) DO UPDATE SET role = EXCLUDED.role, updated_at = NOW()`,
+            [`usr_${Date.now()}`, targetEmail.split('@')[0], targetEmail, cleanRole, verified !== undefined ? Boolean(verified) : true]
+          );
+        }
       }
       if (verified !== undefined) {
         await query(
