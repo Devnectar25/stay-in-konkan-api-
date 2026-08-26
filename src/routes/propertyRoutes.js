@@ -20,25 +20,6 @@ router.get('/', async (req, res) => {
   try {
     await seedDatabasePropertiesIfEmpty();
 
-    // Auto-repair any DB rows where title or name was saved as EMPTY or blank
-    try {
-      await query(`
-        UPDATE properties
-        SET 
-          title = CASE 
-            WHEN title IS NULL OR title = '' OR title = 'EMPTY' THEN COALESCE(NULLIF(name, ''), NULLIF(name, 'EMPTY'), 'Konkan Homestay')
-            ELSE title
-          END,
-          name = CASE 
-            WHEN name IS NULL OR name = '' OR name = 'EMPTY' THEN COALESCE(NULLIF(title, ''), NULLIF(title, 'EMPTY'), 'Konkan Homestay')
-            ELSE name
-          END
-        WHERE title IS NULL OR title = '' OR title = 'EMPTY' OR name IS NULL OR name = '' OR name = 'EMPTY';
-      `);
-    } catch (e) {
-      console.warn('Auto-repair property titles note:', e);
-    }
-
     let rawSql = `SELECT * FROM properties WHERE status IS NULL OR LOWER(status) != 'rejected'`;
     const params = [];
 
@@ -172,7 +153,7 @@ router.post('/', async (req, res) => {
   const finalType = (type || 'homestay').trim().toLowerCase();
   const finalDesc = (description || 'Authentic Konkan homestay listing.').trim();
   const finalImage = image || image_url || '/assets/images/properties/konkan_village_home.png';
-  const finalStatus = (status || 'pending').trim().toLowerCase();
+  const finalStatus = (status || 'live').trim().toLowerCase();
   const propId = (id || `prop-${Date.now()}`).trim();
   const finalHostName = host_name || hostName || host || 'Registered Host';
   const finalHostEmail = host_email || hostEmail || 'host@stayinkonkan.com';

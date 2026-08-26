@@ -39,15 +39,40 @@ CREATE TABLE IF NOT EXISTS properties (
 -- 3. Create Bookings Table
 CREATE TABLE IF NOT EXISTS bookings (
     id VARCHAR(255) PRIMARY KEY,
-    user_id VARCHAR(255) REFERENCES users(id) ON DELETE CASCADE,
-    property_id VARCHAR(255) REFERENCES properties(id) ON DELETE CASCADE,
-    check_in DATE NOT NULL,
-    check_out DATE NOT NULL,
-    guests INT DEFAULT 1,
-    total_price NUMERIC(10, 2) NOT NULL,
-    payment_status VARCHAR(50) DEFAULT 'pending',
+    booking_id VARCHAR(255),
+    user_id VARCHAR(255),
+    user_email VARCHAR(255),
+    guest_email VARCHAR(255),
+    user_name VARCHAR(255),
+    guest_name VARCHAR(255),
+    user_phone VARCHAR(255),
+    guest_phone VARCHAR(255),
+    property_id VARCHAR(255),
+    property_name VARCHAR(255),
+    property_title VARCHAR(255),
+    host_email VARCHAR(255),
+    host_name VARCHAR(255),
+    check_in VARCHAR(255),
+    check_out VARCHAR(255),
+    guests VARCHAR(255),
+    rooms VARCHAR(100),
+    total_amount NUMERIC(10, 2) DEFAULT 0,
+    total_price NUMERIC(10, 2) DEFAULT 0,
+    paid_amount NUMERIC(10, 2) DEFAULT 0,
+    remaining_amount NUMERIC(10, 2) DEFAULT 0,
+    payment_id VARCHAR(255),
+    payment_status VARCHAR(100) DEFAULT 'completed',
+    status VARCHAR(50) DEFAULT 'confirmed',
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
+
+-- Indexes for Bookings
+CREATE INDEX IF NOT EXISTS idx_bookings_user_email ON bookings(user_email);
+CREATE INDEX IF NOT EXISTS idx_bookings_host_email ON bookings(host_email);
+CREATE INDEX IF NOT EXISTS idx_bookings_property_id ON bookings(property_id);
+CREATE INDEX IF NOT EXISTS idx_bookings_status ON bookings(status);
+CREATE INDEX IF NOT EXISTS idx_bookings_created_at ON bookings(created_at DESC);
+
 
 -- 4. Seed Default Admin User
 INSERT INTO users (id, full_name, email, role, verified, provider)
@@ -119,8 +144,8 @@ CREATE TABLE IF NOT EXISTS coupons (
 
 CREATE INDEX IF NOT EXISTS idx_coupons_code ON coupons(code);
 
--- 9. Create Help Desk Issues Table
-CREATE TABLE IF NOT EXISTS issue (
+-- 9. Create Help Desk Table
+CREATE TABLE IF NOT EXISTS help_desk (
     id VARCHAR(255) PRIMARY KEY,
     issue_id VARCHAR(255) UNIQUE NOT NULL,
     title VARCHAR(255) NOT NULL,
@@ -137,9 +162,11 @@ CREATE TABLE IF NOT EXISTS issue (
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS idx_issue_created_at ON issue(created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_issue_status ON issue(status);
-CREATE INDEX IF NOT EXISTS idx_issue_priority ON issue(priority);
+CREATE INDEX IF NOT EXISTS idx_help_desk_created_at ON help_desk(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_help_desk_status ON help_desk(status);
+CREATE INDEX IF NOT EXISTS idx_help_desk_priority ON help_desk(priority);
+CREATE INDEX IF NOT EXISTS idx_help_desk_user_email ON help_desk(user_email);
+
 
 -- 10. Create Application Errors Table
 CREATE TABLE IF NOT EXISTS application_errors (
