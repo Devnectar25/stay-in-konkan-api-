@@ -6,7 +6,7 @@ async function seedDatabase() {
   try {
     // 1. Seed Help Desk Issues
     const issueSql = `
-      INSERT INTO issue (id, issue_id, title, description, category, user_name, user_email, user_phone, priority, status, admin_notes, created_at, updated_at)
+      INSERT INTO help_desk (id, issue_id, title, description, category, user_name, user_email, user_phone, priority, status, admin_notes, created_at, updated_at)
       VALUES
         (
           'ISSUE-UUID-001',
@@ -68,11 +68,14 @@ async function seedDatabase() {
           NOW() - INTERVAL '10 minutes',
           NOW() - INTERVAL '10 minutes'
         )
-      ON CONFLICT (issue_id) DO NOTHING;
+      ON CONFLICT (id) DO UPDATE SET
+        title = EXCLUDED.title,
+        description = EXCLUDED.description,
+        status = EXCLUDED.status;
     `;
 
     await query(issueSql);
-    console.log('✓ Successfully seeded sample issues into database table "issue"!');
+    console.log('✓ Successfully seeded sample issues into database table "help_desk"!');
 
     // 2. Seed Application Errors
     const errorSql = `
