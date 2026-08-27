@@ -363,6 +363,10 @@ export const query = async (text, params = []) => {
               }
               return params[11];
             })(),
+            amenities: params[12] || '',
+            host_name: params[13] || 'Registered Host',
+            host_email: params[14] || '',
+            host_phone: params[15] || '',
             rating: 4.8
           };
 
@@ -390,9 +394,8 @@ export const query = async (text, params = []) => {
           let id = '';
           let titleAlt = '';
 
-          if (params.length >= 15 && typeof params[14] === 'string' && params[14].length > 2) {
-            // Full property update from PUT /api/properties/:id:
-            // [passedTitle, passedLocation, passedPrice, passedType, passedDesc, passedImage, passedStatus, passedHostName, passedHostEmail, passedHostPhone, passedFac1, passedFac2, passedFac3, passedRooms, lookupId, lookupTitle]
+          if (params.length >= 14 && typeof params[14] === 'string' && params[14].length > 2) {
+            // Full property update
             id = params[14];
             if (params[15] && typeof params[15] === 'string') titleAlt = params[15];
 
@@ -403,6 +406,9 @@ export const query = async (text, params = []) => {
             if (params[4]) updateBody.description = params[4];
             if (params[5]) updateBody.image_url = params[5];
             if (params[6]) updateBody.status = params[6];
+            if (params[7]) updateBody.host_name = params[7];
+            if (params[8]) updateBody.host_email = params[8];
+            if (params[9]) updateBody.host_phone = params[9];
             if (params[10]) updateBody.facility1_image = params[10];
             if (params[11]) updateBody.facility2_image = params[11];
             if (params[12]) updateBody.facility3_image = params[12];
@@ -457,23 +463,47 @@ export const query = async (text, params = []) => {
         // 3.6 UPDATE Bookings Status Fallback
         if (lower.startsWith('update bookings')) {
           let status = 'confirmed';
-          let id = '';
+          let targetIds = [];
 
           params.forEach(p => {
-            if (['confirmed', 'completed', 'pending', 'cancelled', 'cancellation_pending', 'cancellation_requested', 'rejected', 'declined'].includes(String(p).toLowerCase())) {
-              status = String(p).toLowerCase();
-            } else if (typeof p === 'string' && (p.startsWith('SIK-') || p.includes('-') || p.length > 2)) {
-              id = p;
+            const val = String(p || '').trim();
+            const valLower = val.toLowerCase();
+            if (['confirmed', 'completed', 'pending', 'cancelled', 'cancellation_pending', 'cancellation_requested', 'rejected', 'declined'].includes(valLower)) {
+              status = valLower;
+            } else if (val.length >= 2) {
+              targetIds.push(val);
             }
           });
 
-          if (!id && params.length > 1) id = params[1] || params[0];
-          if (params.length > 0 && ['confirmed', 'completed', 'pending', 'cancelled', 'cancellation_pending', 'cancellation_requested', 'rejected', 'declined'].includes(String(params[0]).toLowerCase())) {
-            status = String(params[0]).toLowerCase();
+          const primaryId = targetIds[0] || 'SIK-000';
+          const digits = targetIds.map(t => t.replace(/\D/g, '')).filter(d => d.length >= 3);
+          const digitsOnly = digits[0] || '';
+
+          const orClauses = [];
+          targetIds.forEach(t => {
+            const enc = encodeURIComponent(t);
+            orClauses.push(`id.eq.${enc}`);
+            orClauses.push(`booking_id.eq.${enc}`);
+            orClauses.push(`payment_id.eq.${enc}`);
+            if (t.toUpperCase().startsWith('SIK-')) {
+              const stripped = t.replace(/^SIK-/i, '');
+              const encStr = encodeURIComponent(stripped);
+              orClauses.push(`id.eq.${encStr}`);
+              orClauses.push(`booking_id.eq.${encStr}`);
+            } else {
+              const pref = 'SIK-' + t;
+              const encPref = encodeURIComponent(pref);
+              orClauses.push(`id.eq.${encPref}`);
+              orClauses.push(`booking_id.eq.${encPref}`);
+            }
+          });
+          if (digitsOnly) {
+            orClauses.push(`id.ilike.%25${encodeURIComponent(digitsOnly)}%25`);
+            orClauses.push(`booking_id.ilike.%25${encodeURIComponent(digitsOnly)}%25`);
           }
 
           const updateBody = { status: status.toLowerCase() };
-          const patchUrl = `${SUPABASE_URL}/rest/v1/bookings?or=(id.eq.${encodeURIComponent(id)},booking_id.eq.${encodeURIComponent(id)},payment_id.eq.${encodeURIComponent(id)})`;
+          const patchUrl = `${SUPABASE_URL}/rest/v1/bookings?or=(${orClauses.join(',')})`;
           const restRes = await fetch(patchUrl, {
             method: 'PATCH',
             headers: {
@@ -484,11 +514,11 @@ export const query = async (text, params = []) => {
           });
           if (restRes.ok) {
             const rows = await restRes.json().catch(() => []);
-            return { rows: Array.isArray(rows) ? rows : [rows], rowCount: 1 };
+            return { rows: Array.isArray(rows) && rows.length > 0 ? rows : [{ id: primaryId, status }], rowCount: 1 };
           } else {
             const errText = await restRes.text().catch(() => '');
             console.warn('Supabase booking update error:', restRes.status, errText);
-            return { rows: [{ id, status }], rowCount: 1 };
+            return { rows: [{ id: primaryId, status }], rowCount: 1 };
           }
         }
 
@@ -591,12 +621,49 @@ export const query = async (text, params = []) => {
 
         // 4.45 UPDATE Bookings Status Fallback
         if (lower.startsWith('update bookings')) {
-          const status = params[0];
-          const id = params[1];
-          const updateBody = {};
-          if (status) updateBody.status = String(status).toLowerCase();
+          let status = 'confirmed';
+          let targetIds = [];
 
-          const restRes = await fetch(`${SUPABASE_URL}/rest/v1/bookings?or=(id.eq.${encodeURIComponent(id)},booking_id.eq.${encodeURIComponent(id)})`, {
+          params.forEach(p => {
+            const val = String(p || '').trim();
+            const valLower = val.toLowerCase();
+            if (['confirmed', 'completed', 'pending', 'cancelled', 'cancellation_pending', 'cancellation_requested', 'rejected', 'declined'].includes(valLower)) {
+              status = valLower;
+            } else if (val.length >= 2) {
+              targetIds.push(val);
+            }
+          });
+
+          const primaryId = targetIds[0] || 'SIK-000';
+          const digits = targetIds.map(t => t.replace(/\D/g, '')).filter(d => d.length >= 3);
+          const digitsOnly = digits[0] || '';
+
+          const orClauses = [];
+          targetIds.forEach(t => {
+            const enc = encodeURIComponent(t);
+            orClauses.push(`id.eq.${enc}`);
+            orClauses.push(`booking_id.eq.${enc}`);
+            orClauses.push(`payment_id.eq.${enc}`);
+            if (t.toUpperCase().startsWith('SIK-')) {
+              const stripped = t.replace(/^SIK-/i, '');
+              const encStr = encodeURIComponent(stripped);
+              orClauses.push(`id.eq.${encStr}`);
+              orClauses.push(`booking_id.eq.${encStr}`);
+            } else {
+              const pref = 'SIK-' + t;
+              const encPref = encodeURIComponent(pref);
+              orClauses.push(`id.eq.${encPref}`);
+              orClauses.push(`booking_id.eq.${encPref}`);
+            }
+          });
+          if (digitsOnly) {
+            orClauses.push(`id.ilike.%25${encodeURIComponent(digitsOnly)}%25`);
+            orClauses.push(`booking_id.ilike.%25${encodeURIComponent(digitsOnly)}%25`);
+          }
+
+          const updateBody = { status: status.toLowerCase() };
+          const patchUrl = `${SUPABASE_URL}/rest/v1/bookings?or=(${orClauses.join(',')})`;
+          const restRes = await fetch(patchUrl, {
             method: 'PATCH',
             headers: {
               ...headers,
@@ -606,11 +673,11 @@ export const query = async (text, params = []) => {
           });
           if (restRes.ok) {
             const rows = await restRes.json().catch(() => []);
-            return { rows: Array.isArray(rows) ? rows : [rows], rowCount: 1 };
+            return { rows: Array.isArray(rows) && rows.length > 0 ? rows : [{ id: primaryId, status }], rowCount: 1 };
           } else {
             const errText = await restRes.text().catch(() => '');
             console.warn('Supabase booking update error:', restRes.status, errText);
-            return { rows: [{ id, status }], rowCount: 1 };
+            return { rows: [{ id: primaryId, status }], rowCount: 1 };
           }
         }
 
@@ -1746,7 +1813,7 @@ export const query = async (text, params = []) => {
           };
 
           try {
-            const rest1 = await fetch(`${SUPABASE_URL}/rest/v1/${encodeURIComponent('Help Desk')}`, {
+            const rest1 = await fetch(`${SUPABASE_URL}/rest/v1/help_desk`, {
               method: 'POST',
               headers: { ...headers, 'Prefer': 'return=representation' },
               body: JSON.stringify(body)
@@ -1776,7 +1843,7 @@ export const query = async (text, params = []) => {
         if (lower.startsWith('select') && (lower.includes('from help_desk') || lower.includes('from issue'))) {
           let rows = [];
           try {
-            const r1 = await fetch(`${SUPABASE_URL}/rest/v1/${encodeURIComponent('Help Desk')}?select=*&order=created_at.desc`, { headers });
+            const r1 = await fetch(`${SUPABASE_URL}/rest/v1/help_desk?select=*&order=created_at.desc`, { headers });
             if (r1.ok) {
               const data1 = await r1.json();
               if (Array.isArray(data1)) rows.push(...data1);
@@ -1802,7 +1869,7 @@ export const query = async (text, params = []) => {
           if (lower.includes('admin_notes =')) updateBody.admin_notes = params[1] || params[0];
 
           try {
-            await fetch(`${SUPABASE_URL}/rest/v1/${encodeURIComponent('Help Desk')}?or=(id.eq.${encodeURIComponent(id)},issue_id.eq.${encodeURIComponent(id)})`, {
+            await fetch(`${SUPABASE_URL}/rest/v1/help_desk?or=(id.eq.${encodeURIComponent(id)},issue_id.eq.${encodeURIComponent(id)})`, {
               method: 'PATCH',
               headers,
               body: JSON.stringify(updateBody)

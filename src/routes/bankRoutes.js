@@ -298,16 +298,22 @@ router.get('/', async (req, res) => {
     await ensureBankDetailsTable();
 
     const { email, user_type, id } = req.query;
+    const targetEmail = (email || id || '').toLowerCase().trim();
+
     let sql = 'SELECT * FROM bank_details WHERE 1=1';
     const params = [];
 
     if (id) {
       params.push(id);
-      sql += ` AND id = $${params.length}`;
+      params.push(`bd_${targetEmail}`);
+      sql += ` AND (id = $1 OR id = $2 OR LOWER(user_email) = LOWER($1))`;
     }
     if (email) {
-      params.push(email.toLowerCase().trim());
-      sql += ` AND LOWER(user_email) = $${params.length}`;
+      if (params.length === 0) {
+        params.push(targetEmail);
+        params.push(`bd_${targetEmail}`);
+        sql += ` AND (LOWER(user_email) = LOWER($1) OR id = $1 OR id = $2)`;
+      }
     }
     if (user_type) {
       params.push(user_type.toLowerCase().trim());
@@ -319,9 +325,90 @@ router.get('/', async (req, res) => {
     const result = await query(sql, params);
     let items = result.rows || [];
 
-    // Fallback if email specified but no row in DB -> return match from seed list or empty
+    // Robust Fallback 1: Check users table if no bank_details row found
+    if (items.length === 0 && targetEmail) {
+      try {
+        const uRes = await query(
+          `SELECT bank_name, account_number, account_holder_name, ifsc_code, account_type, upi_id, branch_name, bank_details FROM users WHERE LOWER(email) = LOWER($1) OR id = $1 LIMIT 1;`,
+          [targetEmail]
+        );
+        if (uRes && uRes.rows && uRes.rows[0]) {
+          const uRow = uRes.rows[0];
+          let parsedB = {};
+          try {
+            if (typeof uRow.bank_details === 'string') parsedB = JSON.parse(uRow.bank_details);
+            else if (typeof uRow.bank_details === 'object' && uRow.bank_details) parsedB = uRow.bank_details;
+          } catch (e) {}
+
+          const bName = uRow.bank_name || parsedB.bank_name || '';
+          const accNo = uRow.account_number || parsedB.account_number || '';
+          const holder = uRow.account_holder_name || parsedB.account_holder_name || '';
+          const ifsc = uRow.ifsc_code || parsedB.ifsc_code || '';
+
+          if (accNo || ifsc || bName) {
+            items.push({
+              id: `bd_${targetEmail}`,
+              user_email: targetEmail,
+              account_holder_name: holder || 'Account Holder',
+              user_type: 'user',
+              bank_name: bName || 'State Bank of India',
+              account_number: accNo,
+              ifsc_code: ifsc,
+              upi_id: uRow.upi_id || parsedB.upi_id || '',
+              branch_name: uRow.branch_name || parsedB.branch_name || '',
+              account_type: uRow.account_type || parsedB.account_type || 'Savings',
+              is_primary: true,
+              verified_status: 'verified',
+              updated_at: new Date().toISOString()
+            });
+          }
+        }
+      } catch (uErr) {}
+    }
+
+    // Robust Fallback 2: Check hosts table if still no row found
+    if (items.length === 0 && targetEmail) {
+      try {
+        const hRes = await query(
+          `SELECT bank_name, account_number, account_holder_name, ifsc_code, account_type, upi_id, branch_name, bank_details FROM hosts WHERE LOWER(email) = LOWER($1) OR LOWER(host_email) = LOWER($1) OR id = $1 LIMIT 1;`,
+          [targetEmail]
+        );
+        if (hRes && hRes.rows && hRes.rows[0]) {
+          const hRow = hRes.rows[0];
+          let parsedB = {};
+          try {
+            if (typeof hRow.bank_details === 'string') parsedB = JSON.parse(hRow.bank_details);
+            else if (typeof hRow.bank_details === 'object' && hRow.bank_details) parsedB = hRow.bank_details;
+          } catch (e) {}
+
+          const bName = hRow.bank_name || parsedB.bank_name || '';
+          const accNo = hRow.account_number || parsedB.account_number || '';
+          const holder = hRow.account_holder_name || parsedB.account_holder_name || '';
+          const ifsc = hRow.ifsc_code || parsedB.ifsc_code || '';
+
+          if (accNo || ifsc || bName) {
+            items.push({
+              id: `bd_${targetEmail}`,
+              user_email: targetEmail,
+              account_holder_name: holder || 'Host User',
+              user_type: 'host',
+              bank_name: bName || 'State Bank of India',
+              account_number: accNo,
+              ifsc_code: ifsc,
+              upi_id: hRow.upi_id || parsedB.upi_id || '',
+              branch_name: hRow.branch_name || parsedB.branch_name || '',
+              account_type: hRow.account_type || parsedB.account_type || 'Savings',
+              is_primary: true,
+              verified_status: 'verified',
+              updated_at: new Date().toISOString()
+            });
+          }
+        }
+      } catch (hErr) {}
+    }
+
     if (items.length === 0 && email) {
-      const matchSeed = SEED_BANK_DETAILS.filter(b => b.user_email.toLowerCase() === email.toLowerCase());
+      const matchSeed = SEED_BANK_DETAILS.filter(b => b.user_email.toLowerCase() === targetEmail);
       if (matchSeed.length > 0) items = matchSeed;
     } else if (items.length === 0 && !email && !user_type && !id) {
       items = SEED_BANK_DETAILS;
@@ -429,46 +516,20 @@ router.post('/', async (req, res) => {
       primary, status
     ]);
 
-    // 2. Cross-sync to users table
+    // 2. Sync to users table columns
     try {
-      await query(`
-        INSERT INTO users (id, full_name, email, role, verified, bank_name, account_number, account_holder_name, ifsc_code, account_type, upi_id, branch_name, bank_details, updated_at)
-        VALUES ($1, $2, $3, 'guest', true, $4, $5, $6, $7, $8, $9, $10, $11, NOW())
-        ON CONFLICT (email) DO UPDATE SET
-          bank_name = EXCLUDED.bank_name,
-          account_number = EXCLUDED.account_number,
-          account_holder_name = EXCLUDED.account_holder_name,
-          ifsc_code = EXCLUDED.ifsc_code,
-          account_type = EXCLUDED.account_type,
-          upi_id = EXCLUDED.upi_id,
-          branch_name = EXCLUDED.branch_name,
-          bank_details = EXCLUDED.bank_details,
-          updated_at = NOW();
-      `, [
-        `usr_${targetEmail.replace(/[^a-z0-9]/g, '_')}`, holderName, targetEmail,
-        bankName, accNumber, holderName, ifsc, accType, upi, branch, bankDetailsJson
-      ]);
+      await query(
+        `UPDATE users SET bank_details = $1, bank_name = $2, account_number = $3, account_holder_name = $4, ifsc_code = $5, account_type = $6, upi_id = $7, branch_name = $8, updated_at = NOW() WHERE LOWER(email) = LOWER($9) OR id = $9;`,
+        [bankDetailsJson, bankName, accNumber, holderName, ifsc, accType, upi, branch, targetEmail]
+      ).catch(() => {});
     } catch (uErr) {}
 
-    // 3. Cross-sync to hosts table
+    // 3. Sync to hosts table columns
     try {
-      await query(`
-        INSERT INTO hosts (id, full_name, email, bank_name, account_number, account_holder_name, ifsc_code, account_type, upi_id, branch_name, bank_details, verified, status, updated_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, true, 'active', NOW())
-        ON CONFLICT (email) DO UPDATE SET
-          bank_name = EXCLUDED.bank_name,
-          account_number = EXCLUDED.account_number,
-          account_holder_name = EXCLUDED.account_holder_name,
-          ifsc_code = EXCLUDED.ifsc_code,
-          account_type = EXCLUDED.account_type,
-          upi_id = EXCLUDED.upi_id,
-          branch_name = EXCLUDED.branch_name,
-          bank_details = EXCLUDED.bank_details,
-          updated_at = NOW();
-      `, [
-        `host_${targetEmail.replace(/[^a-z0-9]/g, '_')}`, holderName, targetEmail,
-        bankName, accNumber, holderName, ifsc, accType, upi, branch, bankDetailsJson
-      ]);
+      await query(
+        `UPDATE hosts SET bank_details = $1, bank_name = $2, account_number = $3, account_holder_name = $4, ifsc_code = $5, account_type = $6, upi_id = $7, branch_name = $8 WHERE LOWER(email) = LOWER($9) OR LOWER(host_email) = LOWER($9) OR id = $9;`,
+        [bankDetailsJson, bankName, accNumber, holderName, ifsc, accType, upi, branch, targetEmail]
+      ).catch(() => {});
     } catch (hErr) {}
 
     const savedRecord = result.rows?.[0] || {
@@ -483,18 +544,20 @@ router.post('/', async (req, res) => {
       branch_name: branch,
       account_type: accType,
       is_primary: primary,
-      verified_status: status
+      verified_status: status,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
     };
 
-    return res.json({
+    res.json({
       success: true,
-      message: 'Bank details saved successfully across database tables!',
-      bank_detail: savedRecord,
+      message: 'Bank details saved successfully in bank_details table',
+      bank_details: savedRecord,
       data: savedRecord
     });
   } catch (error) {
     console.error('Error saving bank details:', error);
-    return res.status(500).json({
+    res.status(500).json({
       success: false,
       message: 'Failed to save bank details: ' + error.message
     });
@@ -513,41 +576,9 @@ router.delete('/:id', async (req, res) => {
     // 1. Delete from bank_details table
     await query('DELETE FROM bank_details WHERE id = $1 OR user_email = $1 OR LOWER(user_email) = $2 OR LOWER(id) = $2', [id, emailKey]);
 
-    // 2. Clear bank details in users table
-    await query(
-      `UPDATE users SET
-        bank_name = NULL,
-        account_number = NULL,
-        account_holder_name = NULL,
-        ifsc_code = NULL,
-        account_type = NULL,
-        upi_id = NULL,
-        branch_name = NULL,
-        bank_details = NULL,
-        updated_at = NOW()
-       WHERE email = $1 OR LOWER(email) = $2 OR id = $1;`,
-      [id, emailKey]
-    ).catch(() => {});
-
-    // 3. Clear bank details in hosts table
-    await query(
-      `UPDATE hosts SET
-        bank_name = NULL,
-        account_number = NULL,
-        account_holder_name = NULL,
-        ifsc_code = NULL,
-        account_type = NULL,
-        upi_id = NULL,
-        branch_name = NULL,
-        bank_details = NULL,
-        updated_at = NOW()
-       WHERE email = $1 OR LOWER(email) = $2 OR id = $1;`,
-      [id, emailKey]
-    ).catch(() => {});
-
     res.json({
       success: true,
-      message: `Bank details for "${id}" deleted successfully across all database tables.`
+      message: `Bank details for "${id}" deleted successfully from bank_details table.`
     });
   } catch (error) {
     console.error('Error deleting bank details:', error);

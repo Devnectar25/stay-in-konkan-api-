@@ -117,9 +117,42 @@ router.post('/', async (req, res) => {
       const dbRes = await query(insertSql, params);
       if (dbRes && dbRes.rows && dbRes.rows[0]) {
         newIssue = dbRes.rows[0];
+        console.log(`[Help Desk DB Insert Success]: Saved ticket ${newIssue.issue_id} (${newIssue.id}) to PostgreSQL database.`);
       }
     } catch (dbErr) {
-      console.warn('[Issue DB Insert Note]:', dbErr.message);
+      console.warn('[Issue DB Insert Primary Attempt Note]:', dbErr.message);
+      // Retry with guaranteed unique conflict resolution
+      try {
+        const freshUuid = `ISSUE-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+        const freshTicket = `TK-${Math.floor(100000 + Math.random() * 900000)}`;
+        const retrySql = `
+          INSERT INTO help_desk (
+            id, issue_id, title, description, category, user_name, user_email,
+            user_phone, priority, status, admin_notes, created_at, updated_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), NOW())
+          RETURNING *;
+        `;
+        const retryParams = [
+          freshUuid,
+          freshTicket,
+          cleanTitle,
+          cleanDesc,
+          cleanCategory,
+          user_name || 'Guest User',
+          user_email ? user_email.trim().toLowerCase() : null,
+          user_phone || null,
+          cleanPriority,
+          cleanStatus,
+          admin_notes || defaultNotes
+        ];
+        const retryRes = await query(retrySql, retryParams);
+        if (retryRes && retryRes.rows && retryRes.rows[0]) {
+          newIssue = retryRes.rows[0];
+          console.log(`[Help Desk DB Insert Retry Success]: Saved ticket ${newIssue.issue_id} to PostgreSQL database.`);
+        }
+      } catch (retryErr) {
+        console.error('[Issue DB Insert Retry Error]:', retryErr.message);
+      }
     }
 
     // Direct Supabase REST fallback if pg insert failed

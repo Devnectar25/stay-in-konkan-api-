@@ -272,10 +272,18 @@ router.put('/:id/status', async (req, res) => {
          OR LOWER(payment_id) = LOWER($2)
          OR LOWER(REPLACE(id, 'sik-', '')) = LOWER(REPLACE($2, 'sik-', ''))
          OR LOWER(REPLACE(booking_id, 'sik-', '')) = LOWER(REPLACE($2, 'sik-', ''))
-         OR ($3 <> '' AND (id LIKE '%' || $3 || '%' OR booking_id LIKE '%' || $3 || '%'))
       RETURNING *;
     `;
-    const updateResult = await query(rawSql, [status.toLowerCase().trim(), cleanId, digitsOnly]);
+    let updateResult = await query(rawSql, [status.toLowerCase().trim(), cleanId, digitsOnly]);
+    if ((!updateResult || !updateResult.rows || updateResult.rows.length === 0) && digitsOnly) {
+      const fallbackSql = `
+        UPDATE bookings
+        SET status = $1
+        WHERE id LIKE '%' || $2 || '%' OR booking_id LIKE '%' || $2 || '%'
+        RETURNING *;
+      `;
+      updateResult = await query(fallbackSql, [status.toLowerCase().trim(), digitsOnly]);
+    }
 
     // If status is updated to cancelled, check and auto-create cancellation records
     if (status === 'cancelled') {
