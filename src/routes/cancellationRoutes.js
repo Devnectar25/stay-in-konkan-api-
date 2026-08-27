@@ -170,12 +170,14 @@ router.post('/', async (req, res) => {
   const finalCheckIn = check_in || checkIn || '';
   const finalCheckOut = check_out || checkOut || '';
   const finalPaid = parseFloat(paid_amount || paidAmount || paid || 0);
-  let rawRefund = parseFloat(refund_amount || refundAmount || 0);
-  let rawPct = parseInt(refund_percentage || refundPercentage || 0, 10);
-  let baseReason = cancellation_reason || cancellationReason || 'Guest requested cancellation';
-
-  const reasonLower = (baseReason + ' ' + (req.body.cancelled_by || '') + ' ' + (req.body.initiated_by || '')).toLowerCase();
-  const isHostCancelled = req.body.cancelled_by === 'host' || req.body.initiated_by === 'host' || req.body.cancelled_by_host === true || reasonLower.includes('host') || reasonLower.includes('owner');
+  // Strict Enforce: Refund percentage cannot exceed 80% (20% platform fee non-refundable)
+  if (rawPct > 80) {
+    rawPct = 80;
+  }
+  const maxAllowedRefund = Math.round(finalPaid * 0.80);
+  if (rawRefund > maxAllowedRefund && maxAllowedRefund > 0) {
+    rawRefund = maxAllowedRefund;
+  }
 
   if (isHostCancelled) {
     rawPct = 80;
