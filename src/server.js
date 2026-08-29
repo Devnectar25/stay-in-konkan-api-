@@ -18,6 +18,7 @@ import uploadRoutes from './routes/uploadRoutes.js';
 
 import errorRoutes, { generateErrorId, sanitizeSensitiveData, calculateSeverity } from './routes/errorRoutes.js';
 import issueRoutes from './routes/issueRoutes.js';
+import analyticsRoutes from './routes/analyticsRoutes.js';
 import { query } from './db.js';
 
 dotenv.config();
@@ -81,6 +82,7 @@ app.use('/api/bank-details', bankRoutes);
 app.use('/api/upload', uploadRoutes);
 app.use('/api/errors', errorRoutes);
 app.use('/api/issues', issueRoutes);
+app.use('/api/analytics', analyticsRoutes);
 
 
 // Centralized Express Error Handling Middleware
