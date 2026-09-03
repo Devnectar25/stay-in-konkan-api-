@@ -329,7 +329,7 @@ router.get('/full-dashboard', async (req, res) => {
     const applications = appsRes.rows || [];
     const messages = msgsRes.rows || [];
     const subscribers = subsRes.rows || [];
-    const issues = issuesRes?.rows || [];
+    const issues = helpDeskRes?.rows || [];
     
     const cancellations = (cancelsRes1.rows || []).map(extractBankDetails);
 

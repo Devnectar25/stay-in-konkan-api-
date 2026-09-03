@@ -1,6 +1,7 @@
 import express from 'express';
 import crypto from 'crypto';
 import { query } from '../db.js';
+import { sendBookingConfirmationEmail } from '../services/emailService.js';
 
 /**
  * Helper to auto-complete past check-outs if not cancelled
@@ -48,8 +49,10 @@ const ensureBookingsTable = async () => {
         payment_id VARCHAR(255),
         payment_status VARCHAR(100),
         status VARCHAR(50) DEFAULT 'confirmed',
+        confirmation_email_sent BOOLEAN DEFAULT FALSE,
         created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
       );
+      ALTER TABLE bookings ADD COLUMN IF NOT EXISTS confirmation_email_sent BOOLEAN DEFAULT FALSE;
     `).catch(() => {});
   } catch (err) {
     console.warn('[Bookings Table Init Note]:', err.message);
@@ -162,15 +165,73 @@ router.post('/', async (req, res) => {
 
     const result = await query(rawSql, params);
 
+    const createdBooking = (result && result.rows && result.rows[0])
+      ? result.rows[0]
+      : {
+          id: primaryId,
+          booking_id: finalBookingId,
+          user_email: finalUserEmail,
+          user_name: finalUserName,
+          user_phone: finalUserPhone,
+          property_id: finalPropId,
+          property_name: finalPropName,
+          check_in: finalCheckIn,
+          check_out: finalCheckOut,
+          guests: finalGuests,
+          rooms: finalRooms,
+          total_amount: totalVal,
+          paid_amount: paidVal,
+          status: finalStatus
+        };
+
+    // Duplicate Email Prevention: Send confirmation email only if not already sent
+    if (!createdBooking.confirmation_email_sent) {
+      try {
+        const emailRes = await sendBookingConfirmationEmail(createdBooking);
+        if (emailRes && emailRes.success) {
+          await query('UPDATE bookings SET confirmation_email_sent = TRUE WHERE id = $1 OR booking_id = $1', [primaryId]).catch(() => {});
+          createdBooking.confirmation_email_sent = true;
+        }
+      } catch (emailErr) {
+        console.error(`[Brevo Email Failure] Booking confirmation email failed for booking ID: ${finalBookingId}. Error:`, emailErr.message);
+      }
+    }
+
     return res.json({ 
       success: true, 
       message: 'Booking created successfully in PostgreSQL database!', 
-      booking: (result && result.rows && result.rows[0]) ? result.rows[0] : { id: primaryId, booking_id: finalBookingId, user_email: finalUserEmail, property_name: finalPropName } 
+      booking: createdBooking
     });
   } catch (error) {
     console.error('Create booking error:', error);
     return res.status(500).json({ success: false, message: error.message || 'Database error' });
   }
+});
+
+/**
+ * POST /api/bookings/send-test-email
+ * Test endpoint to trigger a Brevo confirmation email directly
+ */
+router.post('/send-test-email', async (req, res) => {
+  const { email, name, booking_id, property_name } = req.body;
+  const testBooking = {
+    booking_id: booking_id || `SIK-TEST-${Math.floor(100000 + Math.random() * 900000)}`,
+    user_email: email || 'devnectar27@gmail.com',
+    user_name: name || 'Test Guest',
+    user_phone: '+91 98221 14455',
+    property_name: property_name || 'Tarkarli Samudra Sparsh Beach Villa',
+    location: 'Tarkarli Beach, Malvan',
+    check_in: '2026-10-10',
+    check_out: '2026-10-12',
+    guests: '2 Guests',
+    rooms: 1,
+    total_amount: 3500,
+    paid_amount: 3500,
+    status: 'Confirmed'
+  };
+
+  const result = await sendBookingConfirmationEmail(testBooking);
+  return res.json({ success: result.success, result, booking: testBooking });
 });
 
 /**

@@ -22,6 +22,7 @@ import analyticsRoutes from './routes/analyticsRoutes.js';
 import { query } from './db.js';
 
 dotenv.config();
+// Server initialized with Supabase config: stkpofofekgobpnzvdor
 
 const app = express();
 const PORT = process.env.PORT || 5001;
