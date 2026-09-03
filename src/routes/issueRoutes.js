@@ -552,10 +552,28 @@ router.delete('/:id', async (req, res) => {
   try {
     await ensureIssueTableExists();
     const { id } = req.params;
+    const cleanId = String(id || '').replace(/^#/, '').trim();
 
+    // 1. Delete from PostgreSQL database tables (help_desk and issue)
     try {
-      await query(`DELETE FROM help_desk WHERE id = $1 OR issue_id = $1`, [id])
-        .catch(() => query(`DELETE FROM issue WHERE id = $1 OR issue_id = $1`, [id]));
+      await query(`DELETE FROM help_desk WHERE id = $1 OR issue_id = $1 OR id = $2 OR issue_id = $2`, [id, cleanId])
+        .catch(() => query(`DELETE FROM issue WHERE id = $1 OR issue_id = $1 OR id = $2 OR issue_id = $2`, [id, cleanId]));
+    } catch (e) {}
+
+    // 2. Delete from Supabase REST API table
+    try {
+      const SUPABASE_URL = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
+      const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY;
+      if (SUPABASE_URL && SUPABASE_KEY) {
+        const headers = {
+          'apikey': SUPABASE_KEY,
+          'Authorization': `Bearer ${SUPABASE_KEY}`,
+          'Content-Type': 'application/json'
+        };
+        await fetch(`${SUPABASE_URL}/rest/v1/help_desk?id=eq.${encodeURIComponent(id)}`, { method: 'DELETE', headers }).catch(() => {});
+        await fetch(`${SUPABASE_URL}/rest/v1/help_desk?issue_id=eq.${encodeURIComponent(cleanId)}`, { method: 'DELETE', headers }).catch(() => {});
+        await fetch(`${SUPABASE_URL}/rest/v1/help_desk?id=eq.${encodeURIComponent(cleanId)}`, { method: 'DELETE', headers }).catch(() => {});
+      }
     } catch (e) {}
 
     return res.json({ success: true, message: `Issue ${id} deleted successfully.` });

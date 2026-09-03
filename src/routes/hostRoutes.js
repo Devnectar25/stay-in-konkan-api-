@@ -299,10 +299,10 @@ router.get('/:id/bank-details', async (req, res) => {
           const holder = hRow.account_holder_name || parsedB.account_holder_name || '';
           const ifsc = hRow.ifsc_code || parsedB.ifsc_code || '';
 
-          if (accNo || ifsc || bName) {
+          if (accNo || hRow.upi_id || parsedB.upi_id) {
             row = {
-              account_holder_name: holder || 'Host User',
-              bank_name: bName || 'State Bank of India',
+              account_holder_name: holder || '',
+              bank_name: bName || '',
               account_number: accNo,
               ifsc_code: ifsc,
               account_type: hRow.account_type || parsedB.account_type || 'Savings',

@@ -7,8 +7,8 @@ dotenv.config();
 
 const router = express.Router();
 
-const SUPABASE_URL = process.env.SUPABASE_URL || 'https://luggntcaytyyyedeytha.supabase.co';
-const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imx1Z2dudGNheXR5eXllZGV5dGhhIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4NzQwNDc1MCwiZXhwIjoyMTAyOTgwNzUwfQ.sS3XlFeYB47RYZwl0_JskrV82Z_LuO3BEjCR3eh67jk';
+const SUPABASE_URL = process.env.SUPABASE_URL || 'https://stkpofofekgobpnzvdor.supabase.co';
+const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN0a3BvZm9mZWtnb2Jwbnp2ZG9yIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4ODM0MzM0NywiZXhwIjoyMTAzOTE5MzQ3fQ.6HSILO2x0sp7mVSfXemMZTn648MpcCDcK8z4JYtX9fc';
 
 let isTableChecked = false;
 const ensureHostApplicationsTable = async () => {
@@ -108,17 +108,47 @@ router.post('/', async (req, res) => {
     return res.status(400).json({ success: false, message: 'Name, email, and location are required.' });
   }
 
+  // 1. Email Format Validation
+  const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
+  const cleanEmail = email.trim().toLowerCase();
+  if (!emailRegex.test(cleanEmail)) {
+    return res.status(400).json({
+      success: false,
+      code: 'INVALID_EMAIL',
+      message: 'Please provide a valid email address (e.g. yourname@domain.com).'
+    });
+  }
+
+  // 2. Mobile Phone Number Validation
+  const rawPhone = String(phone || '').trim();
+  let cleanPhone = rawPhone.replace(/\D/g, '');
+  if (cleanPhone.startsWith('91') && cleanPhone.length === 12) {
+    cleanPhone = cleanPhone.slice(2);
+  } else if (cleanPhone.startsWith('0') && cleanPhone.length === 11) {
+    cleanPhone = cleanPhone.slice(1);
+  }
+
+  const indianPhoneRegex = /^[6-9]\d{9}$/;
+  if (!cleanPhone || !indianPhoneRegex.test(cleanPhone)) {
+    return res.status(400).json({
+      success: false,
+      code: 'INVALID_PHONE',
+      message: 'Please provide a valid 10-digit mobile number starting with 6, 7, 8, or 9.'
+    });
+  }
+
   await ensureHostApplicationsTable();
 
   const uuid = req.body.id || crypto.randomUUID();
   const applicationId = `HA-${Math.floor(1000 + Math.random() * 9000)}`;
-  const cleanEmail = email.trim().toLowerCase();
   const propName = (propertyName || propertyTitle || custom_property_name || customPropertyName || `${name}'s Homestay`).trim();
 
-  // Process & Upload attached document files to Supabase Storage Bucket [host-applications]
-  const finalPropDocUrl = propertyDocUrl || await uploadDocToBucket(propertyDocData, propertyDocName || '712_extract.pdf');
-  const finalGstDocUrl = gstDocUrl || await uploadDocToBucket(gstDocData, gstDocName || 'gst_cert.pdf');
-  const finalIdentityDocUrl = identityDocUrl || idProofDocUrl || await uploadDocToBucket(idProofDocData || identityDocData, idProofDocName || identityDocName || 'aadhaar.pdf');
+  // Process & Upload attached document files in parallel to Supabase Storage Bucket [host-applications]
+  const [finalPropDocUrl, finalGstDocUrl, finalIdentityDocUrl] = await Promise.all([
+    propertyDocUrl ? Promise.resolve(propertyDocUrl) : uploadDocToBucket(propertyDocData, propertyDocName || '712_extract.pdf'),
+    gstDocUrl ? Promise.resolve(gstDocUrl) : uploadDocToBucket(gstDocData, gstDocName || 'gst_cert.pdf'),
+    (identityDocUrl || idProofDocUrl) ? Promise.resolve(identityDocUrl || idProofDocUrl) : uploadDocToBucket(idProofDocData || identityDocData, idProofDocName || identityDocName || 'aadhaar.pdf')
+  ]);
 
   try {
     const rawSql = `
@@ -148,7 +178,7 @@ router.post('/', async (req, res) => {
       applicationId,
       name.trim(),
       cleanEmail,
-      phone ? phone.trim() : null,
+      cleanPhone,
       location.trim(),
       propertyType || 'homestay',
       description ? description.trim() : '',

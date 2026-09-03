@@ -345,13 +345,13 @@ router.get('/', async (req, res) => {
           const holder = uRow.account_holder_name || parsedB.account_holder_name || '';
           const ifsc = uRow.ifsc_code || parsedB.ifsc_code || '';
 
-          if (accNo || ifsc || bName) {
+          if (accNo || uRow.upi_id || parsedB.upi_id) {
             items.push({
               id: `bd_${targetEmail}`,
               user_email: targetEmail,
-              account_holder_name: holder || 'Account Holder',
+              account_holder_name: holder || '',
               user_type: 'user',
-              bank_name: bName || 'State Bank of India',
+              bank_name: bName || '',
               account_number: accNo,
               ifsc_code: ifsc,
               upi_id: uRow.upi_id || parsedB.upi_id || '',
@@ -386,13 +386,13 @@ router.get('/', async (req, res) => {
           const holder = hRow.account_holder_name || parsedB.account_holder_name || '';
           const ifsc = hRow.ifsc_code || parsedB.ifsc_code || '';
 
-          if (accNo || ifsc || bName) {
+          if (accNo || hRow.upi_id || parsedB.upi_id) {
             items.push({
               id: `bd_${targetEmail}`,
               user_email: targetEmail,
-              account_holder_name: holder || 'Host User',
+              account_holder_name: holder || '',
               user_type: 'host',
-              bank_name: bName || 'State Bank of India',
+              bank_name: bName || '',
               account_number: accNo,
               ifsc_code: ifsc,
               upi_id: hRow.upi_id || parsedB.upi_id || '',
@@ -407,13 +407,6 @@ router.get('/', async (req, res) => {
       } catch (hErr) {}
     }
 
-    if (items.length === 0 && email) {
-      const matchSeed = SEED_BANK_DETAILS.filter(b => b.user_email.toLowerCase() === targetEmail);
-      if (matchSeed.length > 0) items = matchSeed;
-    } else if (items.length === 0 && !email && !user_type && !id) {
-      items = SEED_BANK_DETAILS;
-    }
-
     res.json({
       success: true,
       count: items.length,
@@ -425,8 +418,8 @@ router.get('/', async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Failed to fetch bank details',
-      bank_details: SEED_BANK_DETAILS,
-      data: SEED_BANK_DETAILS
+      bank_details: [],
+      data: []
     });
   }
 });
@@ -465,13 +458,13 @@ router.post('/', async (req, res) => {
     }
 
     const recId = id || `bd_${targetEmail}`;
-    const holderName = (account_holder_name || holder_name || 'Account Holder').trim();
+    const holderName = (account_holder_name || holder_name || '').trim();
     const type = user_type || 'user';
-    const bankName = (bank_name || 'State Bank of India').trim();
+    const bankName = (bank_name || '').trim();
     const accNumber = (account_number || '').trim();
     const ifsc = (ifsc_code || '').toUpperCase().trim();
     const upi = (upi_id || '').trim();
-    const branch = (branch_name || 'Main Branch').trim();
+    const branch = (branch_name || '').trim();
     const accType = account_type || 'savings';
     const primary = is_primary !== undefined ? Boolean(is_primary) : true;
     const status = verified_status || 'verified';

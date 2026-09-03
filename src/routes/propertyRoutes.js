@@ -274,6 +274,21 @@ router.post('/', async (req, res) => {
 
   try {
     await ensurePropertyColumns();
+
+    // Check for duplicate property title/name (excluding current id and rejected properties)
+    const duplicateCheck = await query(
+      `SELECT id, title FROM properties WHERE LOWER(TRIM(title)) = LOWER(TRIM($1)) AND id != $2 AND (status IS NULL OR LOWER(status) != 'rejected') LIMIT 1`,
+      [finalTitle, propId]
+    );
+
+    if (duplicateCheck.rows && duplicateCheck.rows.length > 0) {
+      return res.status(400).json({
+        success: false,
+        code: 'DUPLICATE_PROPERTY_TITLE',
+        message: `A property with the name "${finalTitle}" already exists. Please choose a unique name for your property.`
+      });
+    }
+
     const rawSql = `
       INSERT INTO properties (
         id, title, description, location, type, price_per_night, image_url, status,
@@ -438,6 +453,20 @@ router.put('/:id', async (req, res) => {
   const lookupTitle = (originalTitle || title || name || '').trim();
 
   try {
+    if (passedTitle) {
+      const dupCheck = await query(
+        `SELECT id, title FROM properties WHERE LOWER(TRIM(title)) = LOWER(TRIM($1)) AND LOWER(id) != LOWER($2) AND LOWER(REPLACE(id, '_', '-')) != LOWER(REPLACE($2, '_', '-')) AND (status IS NULL OR LOWER(status) != 'rejected') LIMIT 1`,
+        [passedTitle, lookupId]
+      );
+      if (dupCheck.rows && dupCheck.rows.length > 0) {
+        return res.status(400).json({
+          success: false,
+          code: 'DUPLICATE_PROPERTY_TITLE',
+          message: `A property with the name "${passedTitle}" already exists. Please choose a unique name.`
+        });
+      }
+    }
+
     const rawSql = `
       UPDATE properties
       SET 
