@@ -307,7 +307,8 @@ router.get('/full-dashboard', async (req, res) => {
       couponsRes,
       subsAdminsRes,
       reviewsRes,
-      configRes
+      configRes,
+      helpDeskRes
     ] = await Promise.all([
       query('SELECT p.*, u.full_name as owner_name, u.email as owner_email FROM properties p LEFT JOIN users u ON p.host_email = u.email ORDER BY p.created_at DESC').catch(() => ({ rows: [] })),
       query('SELECT * FROM users ORDER BY created_at DESC').catch(() => ({ rows: [] })),

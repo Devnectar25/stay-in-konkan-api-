@@ -1,5 +1,6 @@
 import express from 'express';
 import { query } from '../db.js';
+import { sendBookingStatusEmail, sendRefundNotificationEmail, generateRefundEmailHTML } from '../services/emailService.js';
 
 const router = express.Router();
 
@@ -253,10 +254,13 @@ router.post('/', async (req, res) => {
     // Update booking status in bookings table based on cancellation status
     try {
       const targetBookingStatus = (finalStatus === 'approved' || finalStatus === 'cancelled') ? 'cancelled' : 'cancellation_pending';
-      await query(
-        'UPDATE bookings SET status = $1 WHERE id = $2 OR booking_id = $2 OR payment_id = $2',
+      const bRes = await query(
+        'UPDATE bookings SET status = $1 WHERE id = $2 OR booking_id = $2 OR payment_id = $2 RETURNING *',
         [targetBookingStatus, finalBookingId]
       );
+      if (bRes && bRes.rows && bRes.rows[0]) {
+        sendBookingStatusEmail(bRes.rows[0], 'confirmed').catch(() => {});
+      }
     } catch (bErr) {
       console.warn('[Cancellations API] Booking status update note:', bErr.message);
     }
@@ -319,10 +323,13 @@ router.put('/:id/status', async (req, res) => {
     );
 
     if (finalBookingId) {
-      await query(
-        'UPDATE bookings SET status = $1 WHERE id = $2 OR booking_id = $2 OR payment_id = $2 OR id = $3 OR booking_id = $3',
+      const bRes = await query(
+        'UPDATE bookings SET status = $1 WHERE id = $2 OR booking_id = $2 OR payment_id = $2 OR id = $3 OR booking_id = $3 RETURNING *',
         [newBookingStatus, id, finalBookingId]
       );
+      if (bRes && bRes.rows && bRes.rows[0]) {
+        sendBookingStatusEmail(bRes.rows[0], null).catch(() => {});
+      }
     }
 
     return res.json({ success: true, message: `Cancellation status updated to ${status}` });
@@ -334,7 +341,7 @@ router.put('/:id/status', async (req, res) => {
 
 /**
  * PUT /api/cancellations/:id/refund-payout
- * Process refund payout & set UTR / Transaction Reference ID
+ * Process refund payout, set UTR / Transaction Reference ID, and send automatic refund email to guest
  */
 router.put('/:id/refund-payout', async (req, res) => {
   const { id } = req.params;
@@ -342,16 +349,96 @@ router.put('/:id/refund-payout', async (req, res) => {
 
   try {
     await ensureTableExists();
+    const cleanRefundStatus = refund_status || 'refunded';
+    const cleanTxnId = refund_txn_id || `REFUND-${Date.now()}`;
+
     await query(
-      'UPDATE cancellations SET refund_status = $1, refund_txn_id = $2, refund_amount = COALESCE($3, refund_amount) WHERE id = $4 OR booking_id = $4',
-      [refund_status || 'refunded', refund_txn_id || `REFUND-${Date.now()}`, refund_amount || null, id]
+      'UPDATE cancellations SET refund_status = $1, refund_txn_id = $2, refund_amount = COALESCE($3, refund_amount), status = \'approved\' WHERE id = $4 OR booking_id = $4',
+      [cleanRefundStatus, cleanTxnId, refund_amount || null, id]
     );
 
-    return res.json({ success: true, message: `Refund payout marked as ${refund_status || 'refunded'}` });
+    // Fetch full cancellation record
+    let cancellationObj = null;
+    const cRes = await query('SELECT * FROM cancellations WHERE id = $1 OR booking_id = $1', [id]);
+    if (cRes && cRes.rows && cRes.rows[0]) {
+      cancellationObj = { ...cRes.rows[0] };
+    }
+
+    if (!cancellationObj) {
+      cancellationObj = {
+        id: id,
+        booking_id: id,
+        refund_status: cleanRefundStatus,
+        refund_txn_id: cleanTxnId,
+        refund_amount: refund_amount || 0
+      };
+    }
+
+    // If user_email is missing, fetch from bookings table
+    if (!cancellationObj.user_email && cancellationObj.booking_id) {
+      try {
+        const bRes = await query('SELECT * FROM bookings WHERE id = $1 OR booking_id = $1 OR payment_id = $1', [cancellationObj.booking_id]);
+        if (bRes && bRes.rows && bRes.rows[0]) {
+          const b = bRes.rows[0];
+          cancellationObj.user_email = b.user_email || b.guest_email || b.email;
+          cancellationObj.user_name = cancellationObj.user_name || b.user_name || b.guest_name;
+          cancellationObj.property_name = cancellationObj.property_name || b.property_name;
+          cancellationObj.paid_amount = cancellationObj.paid_amount || b.paid_amount || b.total_amount;
+          cancellationObj.check_in = cancellationObj.check_in || b.check_in;
+          cancellationObj.check_out = cancellationObj.check_out || b.check_out;
+        }
+      } catch (e) {}
+    }
+
+    cancellationObj.refund_status = cleanRefundStatus;
+    cancellationObj.refund_txn_id = cleanTxnId;
+    if (refund_amount) cancellationObj.refund_amount = refund_amount;
+
+    // Automatically trigger refund email notification to guest
+    let emailResult = { success: false };
+    if (cancellationObj.user_email) {
+      emailResult = await sendRefundNotificationEmail(cancellationObj).catch(err => {
+        console.warn('Refund notification email error:', err.message);
+        return { success: false, error: err.message };
+      });
+    }
+
+    return res.json({
+      success: true,
+      message: `Refund payout marked as ${cleanRefundStatus}`,
+      emailResult: emailResult
+    });
   } catch (error) {
     console.error('Update refund payout error:', error);
     return res.json({ success: true, message: `Refund payout recorded` });
   }
+});
+
+/**
+ * POST /api/cancellations/send-test-refund-email
+ * Test endpoint to verify refund notification email dispatch
+ */
+router.post('/send-test-refund-email', async (req, res) => {
+  const { user_email, user_name, booking_id, property_name, paid_amount, refund_amount, refund_txn_id, upi_id, account_number, ifsc_code } = req.body;
+  const testData = {
+    id: `CNC-TEST-${Date.now()}`,
+    booking_id: booking_id || 'SIK-BK-88992',
+    user_email: user_email || 'deepmagare0@gmail.com',
+    user_name: user_name || 'Deep Magare',
+    property_name: property_name || 'Malvan Sea Breeze Villa',
+    check_in: '2026-09-10',
+    check_out: '2026-09-12',
+    paid_amount: paid_amount || 5000,
+    refund_amount: refund_amount || 4000,
+    refund_percentage: 80,
+    refund_txn_id: refund_txn_id || `UTR-${Date.now()}`,
+    upi_id: upi_id || 'deepmagare@upi',
+    account_number: account_number || '',
+    ifsc_code: ifsc_code || ''
+  };
+
+  const result = await sendRefundNotificationEmail(testData);
+  return res.json({ success: true, result });
 });
 
 /**

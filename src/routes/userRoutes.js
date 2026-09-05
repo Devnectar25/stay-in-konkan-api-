@@ -1,7 +1,12 @@
 import express from 'express';
 import { query } from '../db.js';
+import { generateToken } from '../utils/jwt.js';
+import { sendOtpEmail } from '../services/emailService.js';
 
 const router = express.Router();
+
+// In-memory OTP storage with 10-minute expiration
+const otpStore = new Map();
 
 /**
  * GET /api/users/check-email?email=user@example.com
@@ -157,7 +162,6 @@ router.post('/sync', async (req, res) => {
     });
   }
 });
-
 
 /**
  * GET /api/users/:id
@@ -415,6 +419,128 @@ router.delete('/:id/bank-details', async (req, res) => {
   } catch (error) {
     console.error('Delete user bank details error:', error);
     return res.status(500).json({ success: false, message: error.message || 'Database error' });
+  }
+});
+
+/**
+ * POST /api/users/send-otp
+ * Generates a 6-digit OTP code, stores it with a 10-minute expiry,
+ * and sends it to the recipient's email via Brevo REST API v3.
+ */
+router.post('/send-otp', async (req, res) => {
+  try {
+    const { email, purpose = 'signup', full_name, name } = req.body || {};
+    const cleanEmail = (email || '').trim().toLowerCase();
+
+    if (!cleanEmail || !cleanEmail.includes('@')) {
+      return res.status(400).json({
+        success: false,
+        message: 'Valid email address is required.'
+      });
+    }
+
+    const userName = full_name || name || cleanEmail.split('@')[0] || 'Valued Guest';
+    const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
+    const cleanPurpose = String(purpose).toLowerCase().trim();
+    const key = `${cleanEmail}:${cleanPurpose}`;
+
+    // Store OTP with 10-minute expiration (600,000 ms)
+    const expiry = Date.now() + 10 * 60 * 1000;
+    otpStore.set(key, { otp: otpCode, expiry, email: cleanEmail, purpose: cleanPurpose });
+
+    // Also store under fallback key 'any' if generic check is performed
+    otpStore.set(`${cleanEmail}:any`, { otp: otpCode, expiry, email: cleanEmail, purpose: cleanPurpose });
+
+    console.log(`[Brevo Email OTP] Generated code ${otpCode} for ${cleanEmail} (purpose: ${cleanPurpose})`);
+
+    // Dispatch via Brevo REST API v3
+    const sendResult = await sendOtpEmail({
+      toEmail: cleanEmail,
+      otpCode,
+      purpose: cleanPurpose,
+      userName
+    });
+
+    if (sendResult.success) {
+      return res.json({
+        success: true,
+        message: `Verification code sent to ${cleanEmail}`,
+        deliveryMethod: sendResult.method
+      });
+    } else {
+      return res.status(500).json({
+        success: false,
+        message: sendResult.message || 'Failed to deliver OTP email via Brevo.'
+      });
+    }
+  } catch (error) {
+    console.error('Send OTP API error:', error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'An unexpected error occurred while sending OTP.'
+    });
+  }
+});
+
+/**
+ * POST /api/users/verify-otp
+ * Verifies submitted 6-digit OTP code against active records in otpStore.
+ */
+router.post('/verify-otp', async (req, res) => {
+  try {
+    const { email, otp, purpose = 'signup' } = req.body || {};
+    const cleanEmail = (email || '').trim().toLowerCase();
+    const cleanOtp = (otp || '').trim();
+    const cleanPurpose = String(purpose).toLowerCase().trim();
+
+    if (!cleanEmail || !cleanOtp) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email and 6-digit OTP code are required.'
+      });
+    }
+
+    const specificKey = `${cleanEmail}:${cleanPurpose}`;
+    const fallbackKey = `${cleanEmail}:any`;
+    const record = otpStore.get(specificKey) || otpStore.get(fallbackKey);
+
+    if (!record) {
+      return res.status(400).json({
+        success: false,
+        message: 'No active OTP request found for this email address. Please click resend code.'
+      });
+    }
+
+    if (Date.now() > record.expiry) {
+      otpStore.delete(specificKey);
+      otpStore.delete(fallbackKey);
+      return res.status(400).json({
+        success: false,
+        message: 'Verification code has expired. Please request a new code.'
+      });
+    }
+
+    if (record.otp !== cleanOtp) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid verification code. Please check your email and try again.'
+      });
+    }
+
+    // Clear used OTP record
+    otpStore.delete(specificKey);
+    otpStore.delete(fallbackKey);
+
+    return res.json({
+      success: true,
+      message: 'OTP verified successfully'
+    });
+  } catch (error) {
+    console.error('Verify OTP API error:', error);
+    return res.status(500).json({
+      success: false,
+      message: error.message || 'An unexpected error occurred while verifying OTP.'
+    });
   }
 });
 

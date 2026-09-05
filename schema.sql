@@ -311,3 +311,29 @@ CREATE TABLE IF NOT EXISTS coupons (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
+-- 19. Create Host Accounts Table
+CREATE TABLE IF NOT EXISTS host_accounts (
+    id VARCHAR(255) PRIMARY KEY,
+    full_name VARCHAR(255) NOT NULL,
+    email VARCHAR(255) UNIQUE NOT NULL,
+    phone VARCHAR(100),
+    location VARCHAR(255),
+    total_properties INT DEFAULT 0,
+    verified BOOLEAN DEFAULT true,
+    status VARCHAR(50) DEFAULT 'active',
+    bank_name VARCHAR(255),
+    account_number VARCHAR(255),
+    account_holder_name VARCHAR(255),
+    ifsc_code VARCHAR(50),
+    upi_id VARCHAR(255),
+    branch_name VARCHAR(255),
+    account_type VARCHAR(50) DEFAULT 'Savings',
+    payout_status VARCHAR(50) DEFAULT 'eligible',
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_host_accounts_email ON host_accounts(email);
+CREATE INDEX IF NOT EXISTS idx_host_accounts_status ON host_accounts(status);
+
+
