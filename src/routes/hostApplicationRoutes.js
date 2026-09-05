@@ -2,6 +2,7 @@ import express from 'express';
 import crypto from 'crypto';
 import dotenv from 'dotenv';
 import { query } from '../db.js';
+import { sendHostApplicationStatusEmail } from '../services/emailService.js';
 
 dotenv.config();
 
@@ -40,6 +41,7 @@ const ensureHostApplicationsTable = async () => {
       await query(`ALTER TABLE host_applications ADD COLUMN IF NOT EXISTS property_doc_url TEXT;`);
       await query(`ALTER TABLE host_applications ADD COLUMN IF NOT EXISTS gst_doc_url TEXT;`);
       await query(`ALTER TABLE host_applications ADD COLUMN IF NOT EXISTS identity_doc_url TEXT;`);
+      await query(`ALTER TABLE host_applications ADD COLUMN IF NOT EXISTS last_emailed_status VARCHAR(50);`);
     } catch (e) {}
   } catch (err) {
     console.warn('Host applications table init check:', err.message);
@@ -139,7 +141,24 @@ router.post('/', async (req, res) => {
 
   await ensureHostApplicationsTable();
 
-  const uuid = req.body.id || crypto.randomUUID();
+  // Check if an existing application record exists for this applicant email to update it cleanly
+  let targetUuid = req.body.id;
+  if (!targetUuid) {
+    try {
+      const existingRes = await query(
+        'SELECT id FROM host_applications WHERE LOWER(applicant_email) = LOWER($1) LIMIT 1',
+        [cleanEmail]
+      );
+      if (existingRes && existingRes.rows && existingRes.rows[0]) {
+        targetUuid = existingRes.rows[0].id;
+      } else {
+        targetUuid = crypto.randomUUID();
+      }
+    } catch (e) {
+      targetUuid = crypto.randomUUID();
+    }
+  }
+
   const applicationId = `HA-${Math.floor(1000 + Math.random() * 9000)}`;
   const propName = (propertyName || propertyTitle || custom_property_name || customPropertyName || `${name}'s Homestay`).trim();
 
@@ -166,15 +185,19 @@ router.post('/', async (req, res) => {
         property_type = EXCLUDED.property_type,
         description = EXCLUDED.description,
         custom_property_name = EXCLUDED.custom_property_name,
+        property_doc_name = EXCLUDED.property_doc_name,
+        gst_doc_name = EXCLUDED.gst_doc_name,
+        identity_doc_name = EXCLUDED.identity_doc_name,
         property_doc_url = COALESCE(EXCLUDED.property_doc_url, host_applications.property_doc_url),
         gst_doc_url = COALESCE(EXCLUDED.gst_doc_url, host_applications.gst_doc_url),
         identity_doc_url = COALESCE(EXCLUDED.identity_doc_url, host_applications.identity_doc_url),
-        status = EXCLUDED.status
+        status = EXCLUDED.status,
+        created_at = NOW()
       RETURNING *;
     `;
 
     const params = [
-      uuid,
+      targetUuid,
       applicationId,
       name.trim(),
       cleanEmail,
@@ -193,11 +216,17 @@ router.post('/', async (req, res) => {
     ];
 
     const result = await query(rawSql, params);
+    const createdApp = result.rows[0];
+
+    // Trigger automatic host application status email (non-blocking)
+    sendHostApplicationStatusEmail(createdApp, null).catch(err => {
+      console.error('[Host Application Email Trigger Error]:', err.message);
+    });
 
     return res.json({
       success: true,
       message: 'Host application and documents submitted successfully to database & Supabase bucket!',
-      application: result.rows[0]
+      application: createdApp
     });
   } catch (error) {
     console.error('Host application DB save error:', error);
@@ -258,8 +287,18 @@ router.put('/:id/status', async (req, res) => {
 
   try {
     await ensureHostApplicationsTable();
+
+    // 1. Retrieve existing application record to obtain old status before update
+    const existingRes = await query(
+      'SELECT * FROM host_applications WHERE id = $1 OR application_id = $1 OR LOWER(applicant_email) = LOWER($1)',
+      [id]
+    );
+    const oldRecord = existingRes.rows[0];
+    const oldStatus = oldRecord ? oldRecord.status : null;
+
+    // 2. Perform status update in database
     const result = await query(
-      'UPDATE host_applications SET status = $1 WHERE id = $2 OR application_id = $2 RETURNING *',
+      'UPDATE host_applications SET status = $1 WHERE id = $2 OR application_id = $2 OR LOWER(applicant_email) = LOWER($2) RETURNING *',
       [status, id]
     );
 
@@ -277,10 +316,21 @@ router.put('/:id/status', async (req, res) => {
       }
     }
 
+    // 3. Trigger automatic condition-based email dispatch to host
+    let emailResult = null;
+    if (appRecord) {
+      emailResult = await sendHostApplicationStatusEmail(appRecord, oldStatus).catch(err => {
+        console.error('[Host Status Email Dispatch Error]:', err.message);
+        return { success: false, error: err.message };
+      });
+    }
+
     return res.json({
       success: true,
       message: `Host application status updated to ${status}`,
-      application: appRecord
+      application: appRecord,
+      emailSent: emailResult && emailResult.success && !emailResult.skipped,
+      emailDetails: emailResult
     });
   } catch (error) {
     console.error('Update host application status error:', error);
@@ -296,7 +346,7 @@ router.delete('/:id', async (req, res) => {
   const { id } = req.params;
   try {
     await ensureHostApplicationsTable();
-    await query('DELETE FROM host_applications WHERE id = $1 OR application_id = $1', [id]);
+    await query('DELETE FROM host_applications WHERE id = $1 OR application_id = $1 OR LOWER(applicant_email) = LOWER($1)', [id]);
     return res.json({ success: true, message: `Host application ${id} deleted successfully.` });
   } catch (error) {
     console.error('Delete host application error:', error);

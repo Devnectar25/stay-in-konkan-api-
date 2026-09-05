@@ -4,6 +4,8 @@ node_modules/
 # Environment variables & credentials
 .env
 .env.local
+config/serviceAccountKey.json
+serviceAccountKey*.json
 
 # Logs
 *.log
@@ -13,6 +15,10 @@ npm-debug.log*
 .DS_Store
 .vscode/
 .idea/
+
+# Temporary files and caches
+scratch/
+tmp/
 
 # Vercel
 .vercel/

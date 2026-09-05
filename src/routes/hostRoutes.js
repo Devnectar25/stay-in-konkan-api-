@@ -219,12 +219,28 @@ router.post('/', async (req, res) => {
     const params = [hostId, name, cleanEmail, hostPhone, hostLoc, propCount, isVerified, hostStatus];
     const result = await query(rawSql, params);
 
+    // Also persist to host_accounts table
+    try {
+      await query(`
+        INSERT INTO host_accounts (id, full_name, email, phone, location, total_properties, verified, status, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+        ON CONFLICT (email) DO UPDATE SET
+          full_name = EXCLUDED.full_name,
+          phone = COALESCE(EXCLUDED.phone, host_accounts.phone),
+          location = COALESCE(EXCLUDED.location, host_accounts.location),
+          total_properties = COALESCE(EXCLUDED.total_properties, host_accounts.total_properties),
+          verified = EXCLUDED.verified,
+          status = EXCLUDED.status,
+          updated_at = NOW();
+      `, params);
+    } catch (haErr) {}
+
     // Also promote user to role = 'host' in users table
     try {
       await query(`UPDATE users SET role = 'host', verified = $1 WHERE LOWER(email) = $2;`, [isVerified, cleanEmail]);
     } catch (uErr) {}
 
-    return res.json({ success: true, message: 'Host account created/updated successfully', host: result.rows[0] });
+    return res.json({ success: true, message: 'Host account created/updated successfully in host_accounts database table', host: result.rows[0] });
   } catch (error) {
     console.error('Create host error:', error);
     return res.status(500).json({ success: false, message: error.message || 'Failed to create host account' });
