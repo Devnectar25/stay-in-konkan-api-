@@ -77,7 +77,7 @@ export function generateBookingEmailHTML(booking, options = {}) {
     statusMessage = 'We hope you enjoyed your stay in Konkan! Your reservation is now marked as completed. We would love to hear about your experience.';
     buttonText = 'Share Your Feedback';
     showFeedbackButton = true;
-  } else if (rawStatus === 'cancelled' || rawStatus === 'rejected') {
+  } else if (rawStatus === 'cancelled' || rawStatus === 'rejected' || rawStatus === 'cancellation_pending' || rawStatus === 'requested') {
     statusBadgeText = '❌ Booking Cancelled';
     statusBadgeBg = '#ef4444';
     displayStatusName = 'Booking Cancelled';
@@ -99,11 +99,16 @@ export function generateBookingEmailHTML(booking, options = {}) {
   if (options.buttonText) buttonText = options.buttonText;
 
   // Dynamically generate user profile booking URL and brand logo URL
-  const frontendBaseUrl = (process.env.FRONTEND_URL || 'https://stayinkonkan.com').replace(/\/$/, '');
-  const logoSrc = process.env.LOGO_URL || `${frontendBaseUrl}/assets/logo/StayIn_Konkan.png`;
+  const frontendBaseUrl = (process.env.FRONTEND_URL || 'https://stay-in-konkan.vercel.app').replace(/\/$/, '');
+  const logoSrc = process.env.LOGO_URL || 'https://stay-in-konkan.vercel.app/assets/logo/StayIn_Konkan.png';
 
   const userProfileUrl = `${frontendBaseUrl}/profile`;
-  const actionUrl = options.actionUrl || options.propertyUrl || userProfileUrl;
+  const feedbackUrl = 'https://stay-in-konkan.vercel.app/feedback';
+  const actionUrl = (showFeedbackButton || buttonText === 'Share Your Feedback' || rawStatus === 'completed' || rawStatus === 'checked_out')
+    ? feedbackUrl
+    : ((rawStatus === 'confirmed' || rawStatus === 'pending' || rawStatus === 'cancelled' || rawStatus === 'rejected' || rawStatus === 'cancellation_pending' || rawStatus === 'requested' || buttonText === 'View Booking Details' || buttonText === 'View My Bookings')
+      ? 'https://stay-in-konkan.vercel.app/owner-dashboard'
+      : (options.actionUrl || options.propertyUrl || userProfileUrl));
 
   return `
 <!DOCTYPE html>
@@ -148,10 +153,8 @@ export function generateBookingEmailHTML(booking, options = {}) {
 <body>
   <div class="container">
     <div class="header">
-      <div style="background-color: #ffffff; display: inline-block; padding: 12px 28px; border-radius: 14px; box-shadow: 0 4px 14px rgba(0,0,0,0.18); margin-bottom: 12px; text-align: center;">
-        <div style="font-size: 22px; font-weight: 900; color: #1b3823; font-family: Georgia, 'Times New Roman', serif; letter-spacing: -0.2px; line-height: 1;">
-          <span style="color: #22c55e; margin-right: 4px;">🌴</span> Stay in Konkan
-        </div>
+      <div style="background-color: #ffffff; display: inline-block; padding: 6px 14px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.15); margin-bottom: 12px; text-align: center; font-size: 0; line-height: 0; vertical-align: middle;">
+        <img src="${logoSrc}" alt="Stay in Konkan Logo" width="140" style="max-height: 36px; width: auto; max-width: 140px; display: block; margin: 0 auto; border: 0; outline: none; text-decoration: none;" />
       </div>
       <p style="margin: 4px 0 0 0; font-size: 11px; opacity: 0.9; text-transform: uppercase; letter-spacing: 1.5px; color: #ffffff;">Authentic Coastal Hospitality</p>
       <div class="badge">${statusBadgeText}</div>
@@ -194,9 +197,9 @@ export function generateBookingEmailHTML(booking, options = {}) {
 
       <div style="text-align: center; margin-top: 24px;">
         <p style="font-size: 14px; color: #4a5568;">
-          ${rawStatus === 'completed' ? 'How was your stay? We value your experience!' : 'Need to view your stay details or property page online?'}
+          ${(rawStatus === 'completed' || rawStatus === 'checked_out' || buttonText === 'Share Your Feedback') ? 'How was your stay? We value your experience!' : 'Need to view your stay details or property page online?'}
         </p>
-        <a href="${actionUrl}" class="${showFeedbackButton ? 'button-feedback' : 'button'}">${buttonText}</a>
+        <a href="${actionUrl}" class="${(showFeedbackButton || buttonText === 'Share Your Feedback') ? 'button-feedback' : 'button'}" target="_blank" rel="noopener noreferrer">${buttonText}</a>
       </div>
     </div>
 
@@ -255,7 +258,7 @@ export async function sendBookingStatusEmail(booking, oldStatus = null, options 
     subject = `Booking Confirmed - ${bookingId} | Stay in Konkan`;
   } else if (newStatus === 'completed' || newStatus === 'checked_out') {
     subject = `Booking Completed - ${bookingId} | Stay in Konkan`;
-  } else if (newStatus === 'cancelled' || newStatus === 'rejected') {
+  } else if (newStatus === 'cancelled' || newStatus === 'rejected' || newStatus === 'cancellation_pending' || newStatus === 'requested') {
     subject = `Booking Cancelled - ${bookingId} | Stay in Konkan`;
   }
 
@@ -1104,10 +1107,9 @@ export function generateRefundEmailHTML(refundData, options = {}) {
     destinationText = `${bankName}Account ending in •••• ${last4}`;
   }
 
-  const frontendBaseUrl = (process.env.FRONTEND_URL || 'https://stayinkonkan.com').replace(/\/$/, '');
-  const logoSrc = process.env.LOGO_URL || `${frontendBaseUrl}/assets/logo/StayIn_Konkan.png`;
-  const userProfileUrl = `${frontendBaseUrl}/profile`;
-  const actionUrl = options.actionUrl || userProfileUrl;
+  const frontendBaseUrl = (process.env.FRONTEND_URL || 'https://stay-in-konkan.vercel.app').replace(/\/$/, '');
+  const logoSrc = process.env.LOGO_URL || 'https://stay-in-konkan.vercel.app/assets/logo/StayIn_Konkan.png';
+  const actionUrl = 'https://stay-in-konkan.vercel.app/owner-dashboard';
 
   return `
 <!DOCTYPE html>
@@ -1152,7 +1154,9 @@ export function generateRefundEmailHTML(refundData, options = {}) {
 <body>
   <div class="container">
     <div class="header">
-      <h2 style="margin:0; font-size:24px; font-weight:800; letter-spacing:-0.5px;">Stay in Konkan</h2>
+      <div style="background-color: #ffffff; display: inline-block; padding: 6px 14px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.15); margin-bottom: 12px; text-align: center; font-size: 0; line-height: 0; vertical-align: middle;">
+        <img src="${logoSrc}" alt="Stay in Konkan Logo" width="140" style="max-height: 36px; width: auto; max-width: 140px; display: block; margin: 0 auto; border: 0; outline: none; text-decoration: none;" />
+      </div>
       <p style="margin:4px 0 0 0; font-size:13px; opacity:0.9;">Authentic Homestays & Beach Houses</p>
       <div class="badge">💰 Refund Processed & Credited</div>
     </div>

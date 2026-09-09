@@ -587,17 +587,51 @@ router.put('/:id', async (req, res) => {
  */
 router.delete('/:id', async (req, res) => {
   const { id } = req.params;
-  const normalizedId = (id || '').trim();
+  const cleanId = (id || '').trim();
+  const rawIdNoPrefix = cleanId.replace(/^prop[-_]/i, '');
+  const propIdWithPrefix = cleanId.startsWith('prop-') ? cleanId : `prop-${cleanId}`;
 
   try {
+    // 1. Clean up non-historical dependent records (wishlists, reviews)
+    await query(`
+      DELETE FROM wishlists
+      WHERE property_id = $1 OR property_id = $2 OR property_id = $3
+         OR LOWER(property_id) = LOWER($1) OR LOWER(property_id) = LOWER($2) OR LOWER(property_id) = LOWER($3)
+    `, [cleanId, rawIdNoPrefix, propIdWithPrefix]).catch(() => {});
+
+    await query(`
+      DELETE FROM reviews
+      WHERE property_id = $1 OR property_id = $2 OR property_id = $3
+         OR LOWER(property_id) = LOWER($1) OR LOWER(property_id) = LOWER($2) OR LOWER(property_id) = LOWER($3)
+    `, [cleanId, rawIdNoPrefix, propIdWithPrefix]).catch(() => {});
+
+    // 2. Delete property record from properties table
     const rawSql = `
       DELETE FROM properties
-      WHERE LOWER(id) = LOWER($1) 
+      WHERE id = $1 OR id = $2 OR id = $3
+         OR LOWER(id) = LOWER($1) OR LOWER(id) = LOWER($2) OR LOWER(id) = LOWER($3)
          OR LOWER(REPLACE(id, '_', '-')) = LOWER(REPLACE($1, '_', '-'))
-         OR LOWER(title) = LOWER($1)
+         OR LOWER(REPLACE(id, '-', '_')) = LOWER(REPLACE($1, '-', '_'))
+         OR LOWER(REPLACE(id, 'prop-', '')) = LOWER(REPLACE($1, 'prop-', ''))
+         OR LOWER(REPLACE(id, 'prop_', '')) = LOWER(REPLACE($1, 'prop_', ''))
+         OR LOWER(TRIM(title)) = LOWER(TRIM($1))
     `;
-    const result = await query(rawSql, [normalizedId]);
-    return res.json({ success: true, message: `Property ${normalizedId} deleted successfully.` });
+    await query(rawSql, [cleanId, rawIdNoPrefix, propIdWithPrefix]);
+
+    // Direct Supabase REST DELETE request failsafe
+    try {
+      const supabaseUrl = process.env.SUPABASE_URL || 'https://stkpofofekgobpnzvdor.supabase.co';
+      const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN0a3BvZm9mZWtnb2Jwbnp2ZG9yIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4ODM0MzM0NywiZXhwIjoyMTAzOTE5MzQ3fQ.6HSILO2x0sp7mVSfXemMZTn648MpcCDcK8z4JYtX9fc';
+      if (supabaseUrl && supabaseKey) {
+        const headers = { 'apikey': supabaseKey, 'Authorization': `Bearer ${supabaseKey}` };
+        await fetch(`${supabaseUrl}/rest/v1/properties?or=(id.eq.${encodeURIComponent(cleanId)},id.eq.${encodeURIComponent(rawIdNoPrefix)},id.eq.${encodeURIComponent(propIdWithPrefix)},title.eq.${encodeURIComponent(cleanId)})`, {
+          method: 'DELETE',
+          headers
+        }).catch(() => {});
+      }
+    } catch (sbErr) {}
+
+    return res.json({ success: true, message: `Property ${cleanId} deleted successfully from database.` });
   } catch (error) {
     console.error('Delete property error:', error);
     return res.status(500).json({ success: false, message: error.message || 'Database error' });

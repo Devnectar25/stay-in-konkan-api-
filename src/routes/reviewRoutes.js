@@ -5,6 +5,65 @@ import { query } from '../db.js';
 const router = express.Router();
 
 /**
+ * POST /api/reviews/feedback
+ * Saves dedicated guest feedback from /feedback page
+ */
+router.post('/feedback', async (req, res) => {
+  const { rating, categories, comment, name, guest_name, email, user_email, property_id } = req.body;
+  const numRating = Number(rating) || 5;
+
+  if (!numRating || numRating < 1 || numRating > 5) {
+    return res.status(400).json({ success: false, message: 'Please select a valid rating between 1 and 5 stars.' });
+  }
+
+  const uuid = `FBD-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`;
+  const cleanName = (name || guest_name || 'Guest').trim();
+  const cleanEmail = (email || user_email || '').trim().toLowerCase() || null;
+  const propId = String(property_id || 'general_feedback');
+
+  const catList = Array.isArray(categories) ? categories.join(', ') : (categories || '');
+  let fullComment = (comment || '').trim();
+  if (catList) {
+    fullComment = fullComment ? `[Highlights: ${catList}] ${fullComment}` : `[Highlights: ${catList}]`;
+  }
+
+  try {
+    const rawSql = `
+      INSERT INTO reviews (id, property_id, guest_name, user_email, rating, comment, created_at)
+      VALUES ($1, $2, $3, $4, $5, $6, NOW())
+      RETURNING *;
+    `;
+    const params = [
+      uuid,
+      propId,
+      cleanName,
+      cleanEmail,
+      numRating,
+      fullComment || 'Guest Feedback'
+    ];
+
+    const result = await query(rawSql, params);
+
+    return res.json({
+      success: true,
+      message: 'Thank you for your feedback! Your response has been saved.',
+      feedback: (result && result.rows && result.rows[0]) ? result.rows[0] : {
+        id: uuid,
+        property_id: propId,
+        guest_name: cleanName,
+        user_email: cleanEmail,
+        rating: numRating,
+        comment: fullComment,
+        created_at: new Date().toISOString()
+      }
+    });
+  } catch (error) {
+    console.error('Save feedback error:', error);
+    return res.status(500).json({ success: false, message: error.message || 'Failed to submit feedback' });
+  }
+});
+
+/**
  * POST /api/reviews
  * Saves a property review to reviews table in PostgreSQL
  */
