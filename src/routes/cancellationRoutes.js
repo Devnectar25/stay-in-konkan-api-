@@ -263,7 +263,8 @@ router.post('/', async (req, res) => {
 
     const result = await query(insertCancellationsSql, cancelParams);
 
-    // Update booking status in bookings table based on cancellation status
+    // Update booking status in bookings table and send cancellation email notification
+    let bookingDataForEmail = null;
     try {
       const targetBookingStatus = (finalStatus === 'approved' || finalStatus === 'cancelled') ? 'cancelled' : 'cancellation_pending';
       const bRes = await query(
@@ -271,10 +272,30 @@ router.post('/', async (req, res) => {
         [targetBookingStatus, finalBookingId]
       );
       if (bRes && bRes.rows && bRes.rows[0]) {
-        sendBookingStatusEmail(bRes.rows[0], 'confirmed').catch(() => {});
+        bookingDataForEmail = bRes.rows[0];
       }
     } catch (bErr) {
       console.warn('[Cancellations API] Booking status update note:', bErr.message);
+    }
+
+    const emailBookingObj = {
+      id: finalBookingId || finalId,
+      booking_id: finalBookingId || finalId,
+      user_email: finalUserEmail || (bookingDataForEmail && (bookingDataForEmail.user_email || bookingDataForEmail.guest_email || bookingDataForEmail.email)),
+      user_name: finalUserName || (bookingDataForEmail && (bookingDataForEmail.user_name || bookingDataForEmail.guest_name)),
+      property_name: finalProperty || (bookingDataForEmail && (bookingDataForEmail.property_name || bookingDataForEmail.property_title)),
+      location: (bookingDataForEmail && bookingDataForEmail.location) || 'Konkan Coast, Maharashtra',
+      check_in: finalCheckIn || (bookingDataForEmail && (bookingDataForEmail.check_in || bookingDataForEmail.checkIn)),
+      check_out: finalCheckOut || (bookingDataForEmail && (bookingDataForEmail.check_out || bookingDataForEmail.checkOut)),
+      paid_amount: finalPaid || (bookingDataForEmail && (bookingDataForEmail.paid_amount || bookingDataForEmail.total_amount)),
+      total_amount: finalPaid || (bookingDataForEmail && (bookingDataForEmail.total_amount || bookingDataForEmail.paid_amount)),
+      status: 'cancelled'
+    };
+
+    if (emailBookingObj.user_email) {
+      sendBookingStatusEmail(emailBookingObj, null, { force: true }).catch((emailErr) => {
+        console.error('[Cancellations API] Cancellation email delivery warning:', emailErr.message);
+      });
     }
 
     const insertedRecord = (result && result.rows && result.rows[0]) ? extractBankDetails(result.rows[0]) : {

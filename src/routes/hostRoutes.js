@@ -55,31 +55,28 @@ router.get('/', async (req, res) => {
   try {
     await ensureHostsTable();
 
-    // 1. Fetch from hosts table
-    const hostsRes = await query(`SELECT * FROM hosts;`).catch(() => ({ rows: [] }));
+    // Execute all 4 database queries in parallel for maximum speed
+    const [hostsRes, usersRes, appsRes, propsRes] = await Promise.all([
+      query(`SELECT * FROM hosts;`).catch(() => ({ rows: [] })),
+      query(`
+        SELECT id, full_name, email, phone, role, verified, status, created_at, location, bank_name, account_number, account_holder_name, ifsc_code, upi_id
+        FROM users 
+        WHERE LOWER(role) IN ('host', 'owner') 
+           OR email IN (SELECT DISTINCT host_email FROM properties WHERE host_email IS NOT NULL AND host_email != '')
+        ORDER BY created_at DESC;
+      `).catch(() => ({ rows: [] })),
+      query(`
+        SELECT id, applicant_name as full_name, applicant_email as email, phone, location, created_at, status
+        FROM host_applications 
+        WHERE LOWER(status) = 'approved'
+        ORDER BY created_at DESC;
+      `).catch(() => ({ rows: [] })),
+      query(`SELECT id, title, host, host_name, host_email, host_phone, location FROM properties;`).catch(() => ({ rows: [] }))
+    ]);
+
     const dbHosts = hostsRes.rows || [];
-
-    // 2. Fetch from users table (hosts / owners)
-    const usersRes = await query(`
-      SELECT id, full_name, email, phone, role, verified, status, created_at, location, bank_name, account_number, account_holder_name, ifsc_code, upi_id
-      FROM users 
-      WHERE LOWER(role) IN ('host', 'owner') 
-         OR email IN (SELECT DISTINCT host_email FROM properties WHERE host_email IS NOT NULL AND host_email != '')
-      ORDER BY created_at DESC;
-    `).catch(() => ({ rows: [] }));
     const dbUsers = usersRes.rows || [];
-
-    // 3. Fetch from approved host_applications table
-    const appsRes = await query(`
-      SELECT id, applicant_name as full_name, applicant_email as email, phone, location, created_at, status
-      FROM host_applications 
-      WHERE LOWER(status) = 'approved'
-      ORDER BY created_at DESC;
-    `).catch(() => ({ rows: [] }));
     const dbApps = appsRes.rows || [];
-
-    // 4. Fetch properties to associate property counts and location
-    const propsRes = await query(`SELECT id, title, host, host_name, host_email, host_phone, location FROM properties;`).catch(() => ({ rows: [] }));
     const props = propsRes.rows || [];
 
     // Default system hosts fallback
@@ -193,7 +190,7 @@ router.get('/', async (req, res) => {
  */
 router.post('/', async (req, res) => {
   await ensureHostsTable();
-  const { id, full_name, email, phone, location, bank_details, total_properties, verified, status } = req.body;
+  const { id, full_name, email, phone, location, bank_details, total_properties, verified, status, account_holder_name, account_number, branch_name, ifsc_code, bank_name } = req.body;
 
   if (!email) {
     return res.status(400).json({ success: false, message: 'Host email is required' });
@@ -224,6 +221,33 @@ router.post('/', async (req, res) => {
     `;
     const params = [hostId, name, cleanEmail, hostPhone, hostLoc, propCount, isVerified, hostStatus];
     const result = await query(rawSql, params);
+
+    // Save bank details if provided
+    if (account_number || ifsc_code || account_holder_name) {
+      try {
+        await query(`
+          UPDATE hosts SET 
+            account_holder_name = COALESCE($1, account_holder_name),
+            account_number = COALESCE($2, account_number),
+            branch_name = COALESCE($3, branch_name),
+            ifsc_code = COALESCE($4, ifsc_code),
+            bank_name = COALESCE($5, bank_name)
+          WHERE LOWER(email) = LOWER($6);
+        `, [account_holder_name || null, account_number || null, branch_name || null, ifsc_code || null, bank_name || null, cleanEmail]);
+
+        await query(`
+          INSERT INTO bank_details (id, user_email, account_holder_name, user_type, bank_name, account_number, ifsc_code, branch_name, updated_at)
+          VALUES ($1, $2, $3, 'host', $4, $5, $6, $7, NOW())
+          ON CONFLICT (user_email) DO UPDATE SET
+            account_holder_name = EXCLUDED.account_holder_name,
+            bank_name = EXCLUDED.bank_name,
+            account_number = EXCLUDED.account_number,
+            ifsc_code = EXCLUDED.ifsc_code,
+            branch_name = EXCLUDED.branch_name,
+            updated_at = NOW();
+        `, [`BANK-${Date.now()}`, cleanEmail, account_holder_name || name, bank_name || `${branch_name || 'Host'} Bank`, account_number || '', ifsc_code || '', branch_name || '']);
+      } catch (bErr) { }
+    }
 
     // Also persist to host_accounts table
     try {
