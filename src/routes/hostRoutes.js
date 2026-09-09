@@ -95,10 +95,14 @@ router.get('/', async (req, res) => {
 
     const hostMap = new Map();
 
-    // Fill map from defaultHosts
-    defaultHosts.forEach(dh => {
-      if (dh && dh.email) hostMap.set(dh.email.toLowerCase().trim(), dh);
-    });
+    const hasRealDatabaseHosts = dbHosts.length > 0 || dbUsers.length > 0 || dbApps.length > 0 || props.length > 0;
+
+    // Fill map from defaultHosts ONLY if no real database host accounts exist
+    if (!hasRealDatabaseHosts) {
+      defaultHosts.forEach(dh => {
+        if (dh && dh.email) hostMap.set(dh.email.toLowerCase().trim(), dh);
+      });
+    }
 
     // Fill map from dbApps
     dbApps.forEach(app => {
@@ -127,10 +131,10 @@ router.get('/', async (req, res) => {
       }
     });
 
-    // Also collect hosts directly listed in properties table
+    // Also collect hosts directly listed in properties table (excluding @example.com placeholders)
     props.forEach(p => {
       const pEmail = (p.host_email || '').toLowerCase().trim();
-      if (pEmail && pEmail !== 'homestay' && pEmail !== 'host@stayinkonkan.com' && !hostMap.has(pEmail)) {
+      if (pEmail && pEmail !== 'homestay' && pEmail !== 'host@stayinkonkan.com' && !pEmail.endsWith('@example.com') && !hostMap.has(pEmail)) {
         hostMap.set(pEmail, {
           id: `host_${pEmail.replace(/[^a-zA-Z0-9]/g, '_')}`,
           full_name: p.host_name || p.host || pEmail.split('@')[0],
@@ -144,28 +148,30 @@ router.get('/', async (req, res) => {
       }
     });
 
-    const allHostsList = Array.from(hostMap.values()).map(h => {
-      const email = (h.email || '').toLowerCase().trim();
-      const name = (h.full_name || h.name || '').toLowerCase().trim();
+    const allHostsList = Array.from(hostMap.values())
+      .filter(h => h && h.email && !h.email.toLowerCase().trim().endsWith('@example.com'))
+      .map(h => {
+        const email = (h.email || '').toLowerCase().trim();
+        const name = (h.full_name || h.name || '').toLowerCase().trim();
 
-      const matchingProps = props.filter(p => {
-        const pEmail = (p.host_email || '').toLowerCase().trim();
-        const pName = (p.host || p.host_name || '').toLowerCase().trim();
-        return (email && pEmail === email) || (name && pName === name);
+        const matchingProps = props.filter(p => {
+          const pEmail = (p.host_email || '').toLowerCase().trim();
+          const pName = (p.host || p.host_name || '').toLowerCase().trim();
+          return (email && pEmail === email) || (name && pName === name);
+        });
+
+        return {
+          id: h.id || `host_${email.replace(/[^a-zA-Z0-9]/g, '_')}`,
+          full_name: h.full_name || h.name || email.split('@')[0],
+          email: h.email,
+          phone: h.phone || '+91 98765 43210',
+          location: h.location || matchingProps[0]?.location || 'Konkan Region',
+          total_properties: matchingProps.length,
+          verified: h.verified !== false,
+          status: h.status || 'active',
+          created_at: h.created_at || new Date().toISOString()
+        };
       });
-
-      return {
-        id: h.id || `host_${email.replace(/[^a-zA-Z0-9]/g, '_')}`,
-        full_name: h.full_name || h.name || email.split('@')[0],
-        email: h.email,
-        phone: h.phone || '+91 98765 43210',
-        location: h.location || matchingProps[0]?.location || 'Konkan Region',
-        total_properties: matchingProps.length,
-        verified: h.verified !== false,
-        status: h.status || 'active',
-        created_at: h.created_at || new Date().toISOString()
-      };
-    });
 
     // Sort NEWEST / LATEST hosts first (descending timestamp)
     allHostsList.sort((a, b) => {

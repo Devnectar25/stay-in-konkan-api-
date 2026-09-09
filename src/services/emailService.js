@@ -1360,8 +1360,8 @@ export async function sendRefundNotificationEmail(refundData) {
       ).catch(() => {});
 
       await query(
-        `UPDATE cancellations SET refund_status = 'refunded', refund_emailed = TRUE WHERE id = $1 OR booking_id = $1`,
-        [bookingId]
+        `UPDATE cancellations SET refund_status = 'refunded', refund_emailed = TRUE WHERE id = $1 OR booking_id = $1 OR id = $2 OR booking_id = $2`,
+        [refundData.id || bookingId, bookingId]
       ).catch(() => {});
     } catch (logErr) {
       console.warn('[Refund Email Log Note]:', logErr.message);

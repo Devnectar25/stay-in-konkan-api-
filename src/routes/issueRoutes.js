@@ -70,6 +70,16 @@ router.post('/', async (req, res) => {
       return res.status(400).json({ success: false, message: 'Issue title is required.' });
     }
 
+    const cleanEmail = user_email ? String(user_email).trim().toLowerCase() : '';
+    if (!cleanEmail) {
+      return res.status(400).json({ success: false, message: 'Email address is required for Help Desk tickets.' });
+    }
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+    if (!emailRegex.test(cleanEmail)) {
+      return res.status(400).json({ success: false, message: 'Please provide a valid email address (e.g. user@example.com).' });
+    }
+
     const uuid = req.body.id || req.body.uuid || crypto.randomUUID();
     const issueId = req.body.issue_id || req.body.issueId || generateIssueId();
     const cleanTitle = title.trim();
@@ -105,7 +115,7 @@ router.post('/', async (req, res) => {
       cleanDesc,
       cleanCategory,
       user_name || 'Guest User',
-      user_email ? user_email.trim().toLowerCase() : null,
+      cleanEmail,
       user_phone || null,
       cleanPriority,
       cleanStatus,
