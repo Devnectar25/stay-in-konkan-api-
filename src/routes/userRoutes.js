@@ -44,6 +44,8 @@ router.get('/check-email', async (req, res) => {
   }
 });
 
+const pwdAttemptsMap = new Map();
+
 /**
  * POST /api/users/login
  * Server-side credential verification: accepts email + password_hash.
@@ -52,14 +54,28 @@ router.get('/check-email', async (req, res) => {
 router.post('/login', async (req, res) => {
   const { email, password_hash, password } = req.body || {};
   const targetHash = password_hash || password;
+  const cleanEmail = (email || '').trim().toLowerCase();
 
-  if (!email || !targetHash) {
+  if (!cleanEmail || !targetHash) {
     return res.status(400).json({ success: false, reason: 'EMAIL_OR_HASH_MISSING', message: 'Email and password/password_hash are required.' });
+  }
+
+  // Check if user is locked out due to 3 failed attempts
+  const attemptRecord = pwdAttemptsMap.get(cleanEmail);
+  if (attemptRecord && attemptRecord.lockedUntil && Date.now() < attemptRecord.lockedUntil) {
+    const remainingSec = Math.ceil((attemptRecord.lockedUntil - Date.now()) / 1000);
+    return res.status(429).json({
+      success: false,
+      reason: 'TOO_MANY_ATTEMPTS',
+      lockedUntil: attemptRecord.lockedUntil,
+      remainingSec,
+      message: `Too many failed password attempts. Please wait ${remainingSec}s before trying again.`
+    });
   }
 
   try {
     const rawSql = `SELECT id, email, full_name, avatar_url, role, provider, verified, password_hash FROM users WHERE LOWER(email) = LOWER($1)`;
-    const result = await query(rawSql, [email.trim().toLowerCase()]);
+    const result = await query(rawSql, [cleanEmail]);
 
     if (result.rows.length === 0) {
       return res.status(401).json({ success: false, reason: 'USER_NOT_FOUND', message: 'No account found with this email.' });
@@ -73,8 +89,30 @@ router.post('/login', async (req, res) => {
     }
 
     if (user.password_hash !== targetHash && user.password_hash !== password) {
-      return res.status(401).json({ success: false, reason: 'WRONG_PASSWORD', message: 'Incorrect password.' });
+      const attempts = ((attemptRecord?.count) || 0) + 1;
+      if (attempts >= 3) {
+        const lockedUntil = Date.now() + 60 * 1000;
+        pwdAttemptsMap.set(cleanEmail, { count: attempts, lockedUntil });
+        return res.status(429).json({
+          success: false,
+          reason: 'TOO_MANY_ATTEMPTS',
+          lockedUntil,
+          remainingSec: 60,
+          message: 'Too many failed login attempts (3/3). Account is locked for 60 seconds.'
+        });
+      }
+      pwdAttemptsMap.set(cleanEmail, { count: attempts, lockedUntil: 0 });
+      return res.status(401).json({
+        success: false,
+        reason: 'WRONG_PASSWORD',
+        attemptsUsed: attempts,
+        attemptsRemaining: 3 - attempts,
+        message: `Incorrect password. (${attempts} of 3 attempts used)`
+      });
     }
+
+    // Success — clear failed attempts
+    pwdAttemptsMap.delete(cleanEmail);
 
     // Success — strip password_hash from response
     const { password_hash: _, ...safeUser } = user;
