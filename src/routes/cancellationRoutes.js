@@ -37,6 +37,7 @@ const ensureTableExists = async () => {
       await query(`ALTER TABLE cancellations ADD COLUMN IF NOT EXISTS account_number VARCHAR(100);`);
       await query(`ALTER TABLE cancellations ADD COLUMN IF NOT EXISTS ifsc_code VARCHAR(50);`);
       await query(`ALTER TABLE cancellations ADD COLUMN IF NOT EXISTS upi_id VARCHAR(100);`);
+      await query(`ALTER TABLE cancellations ADD COLUMN IF NOT EXISTS refund_emailed BOOLEAN DEFAULT FALSE;`);
     } catch (colErr) {}
   } catch (e) {
     console.warn('[Cancellations API] Table check note:', e.message);
@@ -170,15 +171,26 @@ router.post('/', async (req, res) => {
   const finalProperty = property_name || propertyName || property_title || propertyTitle || 'Konkan Stay Homestay';
   const finalCheckIn = check_in || checkIn || '';
   const finalCheckOut = check_out || checkOut || '';
-  const finalPaid = parseFloat(paid_amount || paidAmount || paid || 0);
+  const finalPaid = parseFloat(paid_amount || paidAmount || total_price || totalPrice || 0);
+
+  // Declare and initialise mutable variables
+  let baseReason = cancellation_reason || cancellationReason || reason || 'Guest requested cancellation';
+  const isHostCancelled = String(baseReason).toLowerCase().includes('host cancel') ||
+    String(status || '').toLowerCase() === 'approved';
+  let rawPct = parseInt(refund_percentage !== undefined && refund_percentage !== null
+    ? refund_percentage
+    : (refundPercentage !== undefined && refundPercentage !== null ? refundPercentage : 0), 10);
+  let rawRefund = parseFloat(refund_amount || refundAmount || 0);
+
+  // If refund not explicitly provided, calculate from percentage
+  if (rawRefund <= 0 && rawPct > 0 && finalPaid > 0) {
+    rawRefund = Math.round(finalPaid * rawPct / 100);
+  }
+
   // Strict Enforce: Refund percentage cannot exceed 80% (20% platform fee non-refundable)
-  if (rawPct > 80) {
-    rawPct = 80;
-  }
+  if (rawPct > 80) rawPct = 80;
   const maxAllowedRefund = Math.round(finalPaid * 0.80);
-  if (rawRefund > maxAllowedRefund && maxAllowedRefund > 0) {
-    rawRefund = maxAllowedRefund;
-  }
+  if (rawRefund > maxAllowedRefund && maxAllowedRefund > 0) rawRefund = maxAllowedRefund;
 
   if (isHostCancelled) {
     rawPct = 80;
@@ -306,23 +318,53 @@ router.post('/', async (req, res) => {
  */
 router.put('/:id/status', async (req, res) => {
   const { id } = req.params;
-  const { status, booking_id } = req.body;
+  const { status, booking_id, refund_amount } = req.body;
 
   if (!status) {
     return res.status(400).json({ success: false, message: 'Status is required.' });
   }
 
   const finalBookingId = booking_id || id;
-  const newBookingStatus = (status === 'approved' || status === 'cancelled') ? 'cancelled' : 'confirmed';
+  const isApproval = status === 'approved' || status === 'cancelled';
+  const newBookingStatus = isApproval ? 'cancelled' : 'confirmed';
 
   try {
     await ensureTableExists();
-    await query(
-      'UPDATE cancellations SET status = $1 WHERE id = $2 OR booking_id = $2 OR id = $3 OR booking_id = $3',
-      [status, id, finalBookingId]
-    );
+
+    // When approving: also ensure refund_amount is set from stored paid_amount * refund_percentage
+    if (isApproval) {
+      // Fetch current record so we can compute refund_amount if missing
+      const existing = await query(
+        'SELECT paid_amount, refund_percentage, refund_amount FROM cancellations WHERE id = $1 OR booking_id = $1 OR id = $2 OR booking_id = $2 LIMIT 1',
+        [id, finalBookingId]
+      ).catch(() => null);
+      const row = existing && existing.rows && existing.rows[0];
+      const storedRefundAmt = parseFloat(refund_amount || (row && row.refund_amount) || 0);
+      const computedRefundAmt = row
+        ? Math.round(parseFloat(row.paid_amount || 0) * parseFloat(row.refund_percentage || 0) / 100)
+        : 0;
+      const finalRefundAmt = storedRefundAmt > 0 ? storedRefundAmt : computedRefundAmt;
+
+      await query(
+        `UPDATE cancellations SET status = $1, refund_status = CASE WHEN refund_status IS NULL OR refund_status = '' THEN 'pending' ELSE refund_status END,
+         refund_amount = CASE WHEN refund_amount IS NULL OR refund_amount = 0 THEN $4 ELSE refund_amount END
+         WHERE id = $2 OR booking_id = $2 OR id = $3 OR booking_id = $3`,
+        [status, id, finalBookingId, finalRefundAmt]
+      );
+    } else {
+      await query(
+        'UPDATE cancellations SET status = $1 WHERE id = $2 OR booking_id = $2 OR id = $3 OR booking_id = $3',
+        [status, id, finalBookingId]
+      );
+    }
 
     if (finalBookingId) {
+      // Purge duplicate pending cancellation records for the same booking ID
+      await query(
+        "DELETE FROM cancellations WHERE (booking_id = $1 OR booking_id = $2) AND status = 'pending' AND id != $1",
+        [id, finalBookingId]
+      ).catch(() => {});
+
       const bRes = await query(
         'UPDATE bookings SET status = $1 WHERE id = $2 OR booking_id = $2 OR payment_id = $2 OR id = $3 OR booking_id = $3 RETURNING *',
         [newBookingStatus, id, finalBookingId]
@@ -349,17 +391,25 @@ router.put('/:id/refund-payout', async (req, res) => {
 
   try {
     await ensureTableExists();
-    const cleanRefundStatus = refund_status || 'refunded';
+    const cleanRefundStatus = (refund_status && refund_status !== 'pending' && !String(refund_status).startsWith('SIK-') && !String(refund_status).startsWith('CNC-') && !String(refund_status).startsWith('BK-')) ? refund_status : 'refunded';
     const cleanTxnId = refund_txn_id || `REFUND-${Date.now()}`;
 
     await query(
-      'UPDATE cancellations SET refund_status = $1, refund_txn_id = $2, refund_amount = COALESCE($3, refund_amount), status = \'approved\' WHERE id = $4 OR booking_id = $4',
+      'UPDATE cancellations SET refund_status = $1, refund_txn_id = $2, refund_amount = COALESCE($3, refund_amount), status = \'approved\' WHERE id = $4 OR booking_id = $4 OR LOWER(id) = LOWER($4) OR LOWER(booking_id) = LOWER($4)',
       [cleanRefundStatus, cleanTxnId, refund_amount || null, id]
     );
 
+    // Also synchronize corresponding record in bookings table if present
+    try {
+      await query(
+        'UPDATE bookings SET refund_status = $1, refund_txn_id = $2, status = \'cancelled\' WHERE id = $3 OR booking_id = $3 OR payment_id = $3',
+        [cleanRefundStatus, cleanTxnId, id]
+      );
+    } catch (_) {}
+
     // Fetch full cancellation record
     let cancellationObj = null;
-    const cRes = await query('SELECT * FROM cancellations WHERE id = $1 OR booking_id = $1', [id]);
+    const cRes = await query('SELECT * FROM cancellations WHERE id = $1 OR booking_id = $1 OR LOWER(id) = LOWER($1) OR LOWER(booking_id) = LOWER($1)', [id]);
     if (cRes && cRes.rows && cRes.rows[0]) {
       cancellationObj = { ...cRes.rows[0] };
     }

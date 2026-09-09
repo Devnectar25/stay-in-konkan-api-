@@ -127,9 +127,14 @@ router.get('/stats', async (req, res) => {
     } catch (e) {}
 
     const allBookingsRows = bookingsRes.rows || [];
-    const totalBookingsCount = allBookingsRows.length;
+    const activeBookingsRows = allBookingsRows.filter(b => {
+      if (!b) return false;
+      const status = String(b.status || '').toLowerCase().trim();
+      return !['cancelled', 'cancelled_by_guest', 'cancelled_by_host', 'cancellation_pending', 'cancellation_requested', 'rejected', 'declined', 'refunded'].includes(status);
+    });
+    const totalBookingsCount = activeBookingsRows.length;
     let totalVolumeAmount = 0;
-    allBookingsRows.forEach(b => {
+    activeBookingsRows.forEach(b => {
       const raw = b.total_amount || b.paid_amount || b.total_price || 0;
       const num = typeof raw === 'number' ? raw : parseFloat(String(raw).replace(/[^\d.]/g, ''));
       if (!isNaN(num) && num > 0) totalVolumeAmount += num;
@@ -345,7 +350,13 @@ router.get('/full-dashboard', async (req, res) => {
     const dbConfigRow = configRes?.rows?.[0] || {};
     const dbTokenPct = Number(dbConfigRow.token_percentage) || 25;
 
-    const totalVolume = bookings.reduce((sum, b) => sum + parseFloat(b.total_amount || b.paid_amount || b.total_price || 0), 0);
+    const activeBookingsList = bookings.filter(b => {
+      if (!b) return false;
+      const status = String(b.status || '').toLowerCase().trim();
+      return !['cancelled', 'cancelled_by_guest', 'cancelled_by_host', 'cancellation_pending', 'cancellation_requested', 'rejected', 'declined', 'refunded'].includes(status);
+    });
+
+    const totalVolume = activeBookingsList.reduce((sum, b) => sum + parseFloat(b.total_amount || b.paid_amount || b.total_price || 0), 0);
     let liveProps = 0;
     let pendingProps = 0;
     properties.forEach(p => {

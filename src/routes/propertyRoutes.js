@@ -84,10 +84,19 @@ router.get('/', async (req, res) => {
 
       if (!hName) hName = 'Registered Host';
 
+      const pImg = p.image_url || p.image || '/assets/images/properties/konkan_village_home.png';
+      const pPrice = Number(p.price_per_night || p.price || 1500);
+
       return {
         ...p,
         title: fallbackTitle,
         name: fallbackTitle,
+        image: pImg,
+        image_url: pImg,
+        fallbackImage: pImg,
+        price: pPrice,
+        price_per_night: pPrice,
+        pricePerNight: pPrice,
         hostName: hName,
         host_name: hName,
         host: hName,
@@ -186,8 +195,17 @@ router.get('/:id', async (req, res) => {
     if (!hName) hName = 'Registered Host';
     if (!hLanguages) hLanguages = 'Marathi, Malvani, Hindi & English';
 
+    const propImg = prop.image_url || prop.image || '/assets/images/properties/konkan_village_home.png';
+    const propPrice = Number(prop.price_per_night || prop.price || 1500);
+
     prop.title = fallbackTitle;
     prop.name = fallbackTitle;
+    prop.image = propImg;
+    prop.image_url = propImg;
+    prop.fallbackImage = propImg;
+    prop.price = propPrice;
+    prop.price_per_night = propPrice;
+    prop.pricePerNight = propPrice;
     prop.hostName = hName;
     prop.host_name = hName;
     prop.host = hName;
@@ -453,7 +471,9 @@ router.put('/:id', async (req, res) => {
   const lookupTitle = (originalTitle || title || name || '').trim();
 
   try {
-    if (passedTitle) {
+    // Only check for duplicate title if the title is being changed to a different title
+    const isTitleUnchanged = lookupTitle && passedTitle && passedTitle.toLowerCase() === lookupTitle.toLowerCase();
+    if (passedTitle && !isTitleUnchanged) {
       const dupCheck = await query(
         `SELECT id, title FROM properties WHERE LOWER(TRIM(title)) = LOWER(TRIM($1)) AND LOWER(id) != LOWER($2) AND LOWER(REPLACE(id, '_', '-')) != LOWER(REPLACE($2, '_', '-')) AND (status IS NULL OR LOWER(status) != 'rejected') LIMIT 1`,
         [passedTitle, lookupId]
@@ -470,31 +490,25 @@ router.put('/:id', async (req, res) => {
     const rawSql = `
       UPDATE properties
       SET 
-        title = COALESCE(NULLIF($1, ''), NULLIF(title, 'EMPTY'), NULLIF(name, 'EMPTY'), title),
-        name = COALESCE(NULLIF($1, ''), NULLIF(name, 'EMPTY'), NULLIF(title, 'EMPTY'), name),
+        title = COALESCE(NULLIF($1, ''), title),
         location = COALESCE(NULLIF($2, ''), location),
-        price = CASE WHEN $3 IS NOT NULL AND $3 > 0 THEN $3 ELSE COALESCE(price, 1500) END,
+        price_per_night = CASE WHEN $3::numeric IS NOT NULL AND $3::numeric > 0 THEN $3::numeric ELSE COALESCE(price_per_night, 1500) END,
         type = COALESCE(NULLIF($4, ''), type),
         description = COALESCE(NULLIF($5, ''), description),
-        image = COALESCE($6, image),
         image_url = COALESCE($6, image_url),
         status = COALESCE(NULLIF($7, ''), status),
-        host = COALESCE($8, host),
         host_name = COALESCE($8, host_name),
         host_email = COALESCE($9, host_email),
         host_phone = COALESCE($10, host_phone),
         facility1_image = COALESCE($11, facility1_image),
         facility2_image = COALESCE($12, facility2_image),
         facility3_image = COALESCE($13, facility3_image),
-        rooms = COALESCE($14, rooms),
-        is_featured = COALESCE($15, is_featured),
-        amenities = COALESCE($16, amenities)
-      WHERE LOWER(id) = LOWER($17) 
-         OR LOWER(REPLACE(id, '_', '-')) = LOWER(REPLACE($17, '_', '-')) 
+        rooms = CASE WHEN $14::text IS NOT NULL AND $14::text != '' THEN $14::text::jsonb ELSE rooms END,
+        amenities = COALESCE($15, amenities)
+      WHERE LOWER(id) = LOWER($16) 
+         OR LOWER(REPLACE(id, '_', '-')) = LOWER(REPLACE($16, '_', '-')) 
+         OR LOWER(title) = LOWER($16)
          OR LOWER(title) = LOWER($17)
-         OR LOWER(title) = LOWER($18)
-         OR LOWER(name) = LOWER($17)
-         OR LOWER(name) = LOWER($18)
       RETURNING *;
     `;
 
@@ -513,28 +527,46 @@ router.put('/:id', async (req, res) => {
       passedFac2,
       passedFac3,
       passedRooms,
-      passedIsFeatured,
       passedAmenities,
       lookupId,
       lookupTitle
     ]);
 
+    const formatDbRow = (row) => {
+      if (!row) return row;
+      const titleVal = row.title || row.name || 'Konkan Homestay';
+      const parsedRooms = typeof row.rooms === 'string' ? (() => { try { return JSON.parse(row.rooms); } catch (e) { return []; } })() : (row.rooms || []);
+      const priceVal = Number(row.price_per_night || row.price || 1500);
+      const imgVal = row.image_url || row.image || '/assets/images/properties/konkan_village_home.png';
+      return {
+        ...row,
+        title: titleVal,
+        name: titleVal,
+        price: priceVal,
+        price_per_night: priceVal,
+        pricePerNight: priceVal,
+        image: imgVal,
+        image_url: imgVal,
+        host: row.host_name || row.host || 'Registered Host',
+        host_name: row.host_name || row.host || 'Registered Host',
+        hostName: row.host_name || row.host || 'Registered Host',
+        rooms: parsedRooms
+      };
+    };
+
     if (!result.rows || result.rows.length === 0) {
       const propIdToSave = lookupId || `prop-${Date.now()}`;
       const insertSql = `
-        INSERT INTO properties (id, title, name, location, price, type, description, image, image_url, status, host, host_name, host_email, host_phone, facility1_image, facility2_image, facility3_image, rooms, amenities)
-        VALUES ($1, $2, $2, $3, $4, $5, $6, $7, $7, $8, $9, $9, $10, $11, $12, $13, $14, $15, $16)
+        INSERT INTO properties (id, title, location, price_per_night, type, description, image_url, status, host_name, host_email, host_phone, facility1_image, facility2_image, facility3_image, rooms, amenities)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, CASE WHEN $15::text IS NOT NULL AND $15::text != '' THEN $15::text::jsonb ELSE '[]'::jsonb END, $16)
         ON CONFLICT (id) DO UPDATE SET
           title = EXCLUDED.title,
-          name = EXCLUDED.name,
           location = EXCLUDED.location,
-          price = EXCLUDED.price,
+          price_per_night = EXCLUDED.price_per_night,
           type = EXCLUDED.type,
           description = EXCLUDED.description,
-          image = EXCLUDED.image,
           image_url = EXCLUDED.image_url,
           status = EXCLUDED.status,
-          host = EXCLUDED.host,
           host_name = EXCLUDED.host_name,
           host_email = EXCLUDED.host_email,
           host_phone = EXCLUDED.host_phone,
@@ -563,17 +595,19 @@ router.put('/:id', async (req, res) => {
         passedRooms,
         passedAmenities
       ]);
+      const savedProp = (insRes.rows && insRes.rows[0]) ? formatDbRow(insRes.rows[0]) : req.body;
       return res.json({
         success: true,
         message: 'Property saved successfully in database!',
-        property: (insRes.rows && insRes.rows[0]) ? insRes.rows[0] : req.body
+        property: savedProp
       });
     }
 
+    const updatedProp = formatDbRow(result.rows[0]);
     return res.json({
       success: true,
       message: 'Property updated successfully in database!',
-      property: (result.rows && result.rows[0]) ? result.rows[0] : req.body
+      property: updatedProp
     });
   } catch (error) {
     console.error('Update property error:', error);

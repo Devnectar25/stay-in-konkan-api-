@@ -1392,10 +1392,18 @@ export const query = async (text, params = []) => {
           } else if (lower.includes('cancellation_reason')) {
             updateBody.cancellation_reason = params[0];
           } else if (lower.includes('refund_status')) {
+            let rs = 'refunded';
+            if (lower.includes("refund_status = 'pending'") || lower.includes("refund_status = 'requested'")) {
+              rs = 'pending';
+            } else if (lower.includes("refund_status = 'refunded'")) {
+              rs = 'refunded';
+            } else if (params[0] && !String(params[0]).startsWith('SIK-') && !String(params[0]).startsWith('CNC-') && !String(params[0]).startsWith('BK-') && params[0] !== cancId) {
+              rs = params[0];
+            }
             updateBody = {
-              refund_status: params[0] || 'refunded',
-              refund_txn_id: params[1] || undefined,
-              refund_amount: params[2] ? Number(params[2]) : undefined
+              refund_status: rs,
+              refund_txn_id: (params[1] && !String(params[1]).startsWith('SIK-')) ? params[1] : undefined,
+              refund_amount: params[2] && !isNaN(params[2]) ? Number(params[2]) : undefined
             };
           } else {
             updateBody = {
@@ -1616,10 +1624,18 @@ export const query = async (text, params = []) => {
           const cancId = params[params.length - 1];
           const updateBody = { updated_at: new Date().toISOString() };
           if (lower.includes('status =')) updateBody.status = params[0];
-          if (lower.includes('refund_status =')) {
-            updateBody.refund_status = params[0];
-            if (params[1]) updateBody.refund_txn_id = params[1];
-            if (params[2]) updateBody.refund_amount = params[2];
+          if (lower.includes('refund_status')) {
+            let rs = 'refunded';
+            if (lower.includes("refund_status = 'pending'") || lower.includes("refund_status = 'requested'")) {
+              rs = 'pending';
+            } else if (lower.includes("refund_status = 'refunded'")) {
+              rs = 'refunded';
+            } else if (params[0] && !String(params[0]).startsWith('SIK-') && !String(params[0]).startsWith('CNC-') && !String(params[0]).startsWith('BK-') && params[0] !== cancId) {
+              rs = params[0];
+            }
+            updateBody.refund_status = rs;
+            if (params[1] && !String(params[1]).startsWith('SIK-')) updateBody.refund_txn_id = params[1];
+            if (params[2] && !isNaN(params[2])) updateBody.refund_amount = params[2];
           }
           if (lower.includes('bank_name =')) {
             updateBody.cancellation_reason = params[0];
@@ -1930,10 +1946,18 @@ export const query = async (text, params = []) => {
           const cancId = params[params.length - 1];
           const updateBody = { updated_at: new Date().toISOString() };
           if (lower.includes('status =')) updateBody.status = params[0];
-          if (lower.includes('refund_status =')) {
-            updateBody.refund_status = params[0];
-            if (params[1]) updateBody.refund_txn_id = params[1];
-            if (params[2]) updateBody.refund_amount = params[2];
+          if (lower.includes('refund_status')) {
+            let rs = 'refunded';
+            if (lower.includes("refund_status = 'pending'") || lower.includes("refund_status = 'requested'")) {
+              rs = 'pending';
+            } else if (lower.includes("refund_status = 'refunded'")) {
+              rs = 'refunded';
+            } else if (params[0] && !String(params[0]).startsWith('SIK-') && !String(params[0]).startsWith('CNC-') && !String(params[0]).startsWith('BK-') && params[0] !== cancId) {
+              rs = params[0];
+            }
+            updateBody.refund_status = rs;
+            if (params[1] && !String(params[1]).startsWith('SIK-')) updateBody.refund_txn_id = params[1];
+            if (params[2] && !isNaN(params[2])) updateBody.refund_amount = params[2];
           }
           if (lower.includes('bank_name =')) {
             updateBody.cancellation_reason = params[0];
