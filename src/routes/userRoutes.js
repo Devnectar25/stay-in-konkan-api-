@@ -482,12 +482,36 @@ router.post('/send-otp', async (req, res) => {
     const cleanPurpose = String(purpose).toLowerCase().trim();
     const key = `${cleanEmail}:${cleanPurpose}`;
 
-    // Store OTP with 10-minute expiration (600,000 ms)
+    // Store OTP in memory with 10-minute expiration (600,000 ms)
     const expiry = Date.now() + 10 * 60 * 1000;
     otpStore.set(key, { otp: otpCode, expiry, email: cleanEmail, purpose: cleanPurpose });
-
-    // Also store under fallback key 'any' if generic check is performed
     otpStore.set(`${cleanEmail}:any`, { otp: otpCode, expiry, email: cleanEmail, purpose: cleanPurpose });
+
+    // Also persist to PostgreSQL database table to survive server restarts and serverless multi-instance calls
+    try {
+      await query(
+        `CREATE TABLE IF NOT EXISTS otp_codes (
+          id SERIAL PRIMARY KEY,
+          email VARCHAR(255) NOT NULL,
+          otp VARCHAR(20) NOT NULL,
+          purpose VARCHAR(50) NOT NULL,
+          expiry BIGINT NOT NULL,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );`
+      ).catch(() => {});
+
+      await query(
+        `DELETE FROM otp_codes WHERE LOWER(email) = $1 OR expiry < $2;`,
+        [cleanEmail, Date.now()]
+      ).catch(() => {});
+
+      await query(
+        `INSERT INTO otp_codes (email, otp, purpose, expiry) VALUES ($1, $2, $3, $4);`,
+        [cleanEmail, otpCode, cleanPurpose, expiry]
+      ).catch(() => {});
+    } catch (dbErr) {
+      console.warn('[Brevo OTP DB Notice]:', dbErr.message);
+    }
 
     console.log(`[Brevo Email OTP] Generated code ${otpCode} for ${cleanEmail} (purpose: ${cleanPurpose})`);
 
@@ -522,7 +546,7 @@ router.post('/send-otp', async (req, res) => {
 
 /**
  * POST /api/users/verify-otp
- * Verifies submitted 6-digit OTP code against active records in otpStore.
+ * Verifies submitted 6-digit OTP code against active records in otpStore or database fallback.
  */
 router.post('/verify-otp', async (req, res) => {
   try {
@@ -540,7 +564,38 @@ router.post('/verify-otp', async (req, res) => {
 
     const specificKey = `${cleanEmail}:${cleanPurpose}`;
     const fallbackKey = `${cleanEmail}:any`;
-    const record = otpStore.get(specificKey) || otpStore.get(fallbackKey);
+    let record = otpStore.get(specificKey) || otpStore.get(fallbackKey);
+
+    // Memory fallback: search for ANY active record matching email regardless of purpose
+    if (!record) {
+      for (const [k, v] of otpStore.entries()) {
+        if (v && v.email === cleanEmail && Date.now() <= v.expiry) {
+          record = v;
+          break;
+        }
+      }
+    }
+
+    // Database fallback: search persistent otp_codes table if memory lookup failed
+    if (!record) {
+      try {
+        const dbRes = await query(
+          `SELECT * FROM otp_codes WHERE LOWER(email) = $1 AND expiry >= $2 ORDER BY id DESC LIMIT 1;`,
+          [cleanEmail, Date.now()]
+        );
+        if (dbRes && dbRes.rows && dbRes.rows.length > 0) {
+          const row = dbRes.rows[0];
+          record = {
+            otp: String(row.otp).trim(),
+            expiry: Number(row.expiry),
+            email: row.email,
+            purpose: row.purpose
+          };
+        }
+      } catch (dbErr) {
+        console.warn('[Verify OTP DB Query Notice]:', dbErr.message);
+      }
+    }
 
     if (!record) {
       return res.status(400).json({
@@ -552,6 +607,9 @@ router.post('/verify-otp', async (req, res) => {
     if (Date.now() > record.expiry) {
       otpStore.delete(specificKey);
       otpStore.delete(fallbackKey);
+      try {
+        await query(`DELETE FROM otp_codes WHERE LOWER(email) = $1;`, [cleanEmail]).catch(() => {});
+      } catch (e) {}
       return res.status(400).json({
         success: false,
         message: 'Verification code has expired. Please request a new code.'
@@ -565,9 +623,12 @@ router.post('/verify-otp', async (req, res) => {
       });
     }
 
-    // Clear used OTP record
+    // Clear used OTP record from memory and DB
     otpStore.delete(specificKey);
     otpStore.delete(fallbackKey);
+    try {
+      await query(`DELETE FROM otp_codes WHERE LOWER(email) = $1;`, [cleanEmail]).catch(() => {});
+    } catch (e) {}
 
     return res.json({
       success: true,
