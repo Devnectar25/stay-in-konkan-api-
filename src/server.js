@@ -46,12 +46,14 @@ app.use(cors({
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
-// Root Endpoint
-app.get('/', (req, res) => {
+// Root & API Info Endpoints
+app.get(['/', '/api', '/api/'], (req, res) => {
   res.json({
     status: 'OK',
+    service: 'Stay in Konkan Backend API',
     message: '🚀 Stay in Konkan API is running live on Vercel!',
-    health: '/api/health'
+    health: '/api/health',
+    timestamp: new Date().toISOString()
   });
 });
 
