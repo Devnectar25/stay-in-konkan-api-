@@ -1181,8 +1181,10 @@ export const query = async (text, params = []) => {
 
         // 7.1 DELETE Properties Fallback
         if (lower.startsWith('delete from properties')) {
-          const propId = params[0];
-          const restRes = await fetch(`${SUPABASE_URL}/rest/v1/properties?or=(id.eq.${encodeURIComponent(propId)},name.eq.${encodeURIComponent(propId)},title.eq.${encodeURIComponent(propId)})`, {
+          const propId = String(params[0] || '').trim();
+          const rawIdNoPrefix = propId.replace(/^prop[-_]/i, '');
+          const propIdWithPrefix = propId.startsWith('prop-') ? propId : `prop-${propId}`;
+          const restRes = await fetch(`${SUPABASE_URL}/rest/v1/properties?or=(id.eq.${encodeURIComponent(propId)},id.eq.${encodeURIComponent(rawIdNoPrefix)},id.eq.${encodeURIComponent(propIdWithPrefix)},title.eq.${encodeURIComponent(propId)})`, {
             method: 'DELETE',
             headers
           });
