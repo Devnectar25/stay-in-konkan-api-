@@ -12,11 +12,11 @@ const seedDatabasePropertiesIfEmpty = async () => {
 
 const ensurePropertyColumns = async () => {
   try {
-    await query(`ALTER TABLE properties ADD COLUMN IF NOT EXISTS amenities TEXT;`);
-    await query(`ALTER TABLE properties ADD COLUMN IF NOT EXISTS host_name VARCHAR(255);`);
-    await query(`ALTER TABLE properties ADD COLUMN IF NOT EXISTS host_email VARCHAR(255);`);
-    await query(`ALTER TABLE properties ADD COLUMN IF NOT EXISTS host_phone VARCHAR(255);`);
-    await query(`ALTER TABLE properties ADD COLUMN IF NOT EXISTS host_languages VARCHAR(255);`);
+    await query(`ALTER TABLE properties ADD COLUMN IF NOT EXISTS amenities TEXT;`).catch(() => {});
+    await query(`ALTER TABLE properties ADD COLUMN IF NOT EXISTS host_name VARCHAR(255);`).catch(() => {});
+    await query(`ALTER TABLE properties ADD COLUMN IF NOT EXISTS host_email VARCHAR(255);`).catch(() => {});
+    await query(`ALTER TABLE properties ADD COLUMN IF NOT EXISTS host_phone VARCHAR(255);`).catch(() => {});
+    await query(`ALTER TABLE properties ADD COLUMN IF NOT EXISTS host_languages VARCHAR(255);`).catch(() => {});
   } catch (e) {}
 };
 
