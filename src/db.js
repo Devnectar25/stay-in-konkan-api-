@@ -121,23 +121,37 @@ export const query = async (text, params = []) => {
           if (Array.isArray(rows)) {
             if (params && params.length > 0 && params[0] !== undefined) {
               const p0 = String(params[0]).toLowerCase().trim();
-              if (lower.includes('where') || lower.includes('$1')) {
+              const cleanP0 = p0.replace(/%/g, '');
+
+              if (lower.includes('status = $1') || lower.includes('status=$1') || lower.includes('lower(status) = $1') || lower.includes('lower(status)=$1')) {
+                rows = rows.filter(r => r && String(r.status || 'live').toLowerCase().trim() === p0);
+              } else if (lower.includes('property_id = $1') || lower.includes('property_id=$1')) {
+                rows = rows.filter(r => r && String(r.property_id || '').toLowerCase().trim() === p0);
+              } else if (lower.includes('role = $1') || lower.includes('lower(role) = $1') || lower.includes('role=$1') || lower.includes('lower(role)=$1')) {
+                rows = rows.filter(r => r && String(r.role || '').toLowerCase().trim() === p0);
+              } else if (lower.includes('like $1') || lower.includes('like $2')) {
+                if (cleanP0) {
+                  rows = rows.filter(r => {
+                    const loc = (r.location || r.title || r.name || r.description || '').toLowerCase();
+                    return loc.includes(cleanP0);
+                  });
+                }
+              } else if (lower.includes('email = $1') || lower.includes('user_email = $1') || lower.includes('host_email = $1') || lower.includes('id = $1') || lower.includes('applicant_email = $1') || lower.includes('lower(email) = $1') || lower.includes('$1')) {
                 rows = rows.filter(r => {
                   const rEmail = (r.email || r.user_email || r.applicant_email || r.guest_email || '').toLowerCase().trim();
                   const rId = (r.id || r.booking_id || r.application_id || r.issue_id || r.error_id || '').toLowerCase().trim();
                   const rHostEmail = (r.host_email || r.owner_email || '').toLowerCase().trim();
-                  const rPropId = (r.property_id || '').toLowerCase().trim();
-                  // If checking property_id with $1 (e.g. SELECT FROM reviews WHERE property_id = $1)
-                  if (lower.includes('property_id = $1') || lower.includes('property_id=$1')) {
-                    return rPropId === p0;
-                  }
-                  // If checking role with $1 (e.g. SELECT FROM users WHERE role = $1)
-                  if (lower.includes('role = $1') || lower.includes('lower(role) = $1') || lower.includes('role=$1') || lower.includes('lower(role)=$1')) {
-                    return String(r.role || '').toLowerCase().trim() === p0;
-                  }
                   return rEmail === p0 || rId === p0 || rHostEmail === p0;
                 });
               }
+            }
+
+            // Filter properties by live/approved status if status condition in SQL
+            if (tableName === 'properties' && (lower.includes("in ('live', 'approved')") || lower.includes("in('live', 'approved')"))) {
+              rows = rows.filter(r => {
+                const s = String(r?.status || 'live').toLowerCase().trim();
+                return !s || s === 'live' || s === 'approved';
+              });
             }
 
             // Filter by property_id parameter (e.g. property_id = $2)
