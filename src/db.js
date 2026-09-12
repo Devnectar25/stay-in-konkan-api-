@@ -23,8 +23,16 @@ const poolConfig = connectionString
 
 export const pool = new Pool(poolConfig);
 
-const SUPABASE_URL = process.env.SUPABASE_URL || 'https://xewkclgttvhuunxqjpyj.supabase.co';
-const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inhld2tjbGd0dHZodXVueHFqcHlqIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4OTEwNDUwMSwiZXhwIjoyMTA0NjgwNTAxfQ.Nd6z9PNM9Bz0f8T0BAJcuqfPeVv2phRXZ1Oc2SuU6cI';
+const ACTIVE_SUPABASE_URL = 'https://xewkclgttvhuunxqjpyj.supabase.co';
+const ACTIVE_SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inhld2tjbGd0dHZodXVueHFqcHlqIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4OTEwNDUwMSwiZXhwIjoyMTA0NjgwNTAxfQ.Nd6z9PNM9Bz0f8T0BAJcuqfPeVv2phRXZ1Oc2SuU6cI';
+
+const SUPABASE_URL = (process.env.SUPABASE_URL && !process.env.SUPABASE_URL.includes('stkpofofekgobpnzvdor'))
+  ? process.env.SUPABASE_URL
+  : ACTIVE_SUPABASE_URL;
+
+const SUPABASE_KEY = (process.env.SUPABASE_SERVICE_ROLE_KEY && !process.env.SUPABASE_SERVICE_ROLE_KEY.includes('stkpofofekgobpnzvdor'))
+  ? process.env.SUPABASE_SERVICE_ROLE_KEY
+  : ACTIVE_SUPABASE_KEY;
 
 export const userBankMap = new Map();
 
