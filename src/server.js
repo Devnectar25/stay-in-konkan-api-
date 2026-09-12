@@ -20,7 +20,7 @@ import uploadRoutes from './routes/uploadRoutes.js';
 import errorRoutes, { generateErrorId, sanitizeSensitiveData, calculateSeverity } from './routes/errorRoutes.js';
 import issueRoutes from './routes/issueRoutes.js';
 import analyticsRoutes from './routes/analyticsRoutes.js';
-import { query } from './db.js';
+import { query, pool } from './db.js';
 
 dotenv.config();
 // Server initialized with Supabase config: stkpofofekgobpnzvdor
