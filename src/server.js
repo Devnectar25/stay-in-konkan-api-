@@ -1,3 +1,4 @@
+// Stay In Konkan API - Express Application Entry Point
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
