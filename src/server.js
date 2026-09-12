@@ -72,6 +72,20 @@ app.get('/api/health', (req, res) => {
   });
 });
 
+app.get('/api/debug-db', async (req, res) => {
+  try {
+    const rawRes = await pool.query("SELECT COUNT(*) FROM properties;").catch(e => ({ error: e.message }));
+    const queryRes = await query("SELECT * FROM properties;").catch(e => ({ error: e.message }));
+    return res.json({
+      poolResult: rawRes?.rows || rawRes,
+      queryResultCount: queryRes?.rows?.length,
+      supabaseUrlUsed: process.env.SUPABASE_URL || 'none'
+    });
+  } catch (e) {
+    return res.json({ error: e.message });
+  }
+});
+
 
 // API Routes
 app.use('/api/users', userRoutes);
