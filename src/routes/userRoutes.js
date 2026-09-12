@@ -482,8 +482,8 @@ router.post('/send-otp', async (req, res) => {
     const cleanPurpose = String(purpose).toLowerCase().trim();
     const key = `${cleanEmail}:${cleanPurpose}`;
 
-    // Store OTP in memory with 10-minute expiration (600,000 ms)
-    const expiry = Date.now() + 10 * 60 * 1000;
+    // Store OTP in memory with 30-minute expiration (1,800,000 ms)
+    const expiry = Date.now() + 30 * 60 * 1000;
     otpStore.set(key, { otp: otpCode, expiry, email: cleanEmail, purpose: cleanPurpose });
     otpStore.set(`${cleanEmail}:any`, { otp: otpCode, expiry, email: cleanEmail, purpose: cleanPurpose });
 

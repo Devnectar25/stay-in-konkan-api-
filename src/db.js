@@ -49,11 +49,12 @@ const detectTable = (text) => {
   const fromMatch = lower.match(/\bfrom\s+([a-z0-9_]+)/);
   if (fromMatch && fromMatch[1]) {
     const mainTable = fromMatch[1].trim();
-    if (['hosts', 'host_accounts', 'properties', 'host_applications', 'users', 'bookings', 'contact_messages', 'newsletter_subscribers', 'cancellations', 'subadmins', 'reviews', 'wishlists', 'coupons', 'help_desk', 'helpdesk', 'issue', 'application_errors', 'platform_config'].includes(mainTable)) {
+    if (['hosts', 'host_accounts', 'properties', 'host_applications', 'users', 'bookings', 'contact_messages', 'newsletter_subscribers', 'cancellations', 'subadmins', 'reviews', 'wishlists', 'coupons', 'help_desk', 'helpdesk', 'issue', 'application_errors', 'platform_config', 'otp_codes'].includes(mainTable)) {
       return mainTable;
     }
   }
 
+  if (lower.includes('otp_codes')) return 'otp_codes';
   if (lower.includes('platform_config')) return 'platform_config';
   if (lower.includes('host_accounts')) return 'host_accounts';
   if (lower.includes('hosts')) return 'hosts';
@@ -221,6 +222,40 @@ export const query = async (text, params = []) => {
           }
 
           return { rows, rowCount: rows.length };
+        }
+
+        // 1.5 INSERT INTO otp_codes Fallback
+        if (lower.startsWith('insert into otp_codes')) {
+          const body = {
+            email: params[0] ? String(params[0]).toLowerCase().trim() : undefined,
+            otp: params[1] ? String(params[1]).trim() : undefined,
+            purpose: params[2] ? String(params[2]).toLowerCase().trim() : 'signup',
+            expiry: Number(params[3] || (Date.now() + 30 * 60 * 1000))
+          };
+          const restRes = await fetch(`${SUPABASE_URL}/rest/v1/otp_codes`, {
+            method: 'POST',
+            headers: {
+              ...headers,
+              'Prefer': 'resolution=merge-duplicates,return=representation'
+            },
+            body: JSON.stringify(body)
+          });
+          if (restRes.ok) {
+            const rows = await restRes.json().catch(() => []);
+            return { rows: Array.isArray(rows) ? rows : [rows], rowCount: 1 };
+          }
+          return { rows: [body], rowCount: 1 };
+        }
+
+        // 1.6 DELETE FROM otp_codes Fallback
+        if (lower.startsWith('delete from otp_codes')) {
+          const targetEmail = params[0] ? String(params[0]).toLowerCase().trim() : '';
+          let restUrl = `${SUPABASE_URL}/rest/v1/otp_codes`;
+          if (targetEmail) {
+            restUrl += `?email=eq.${encodeURIComponent(targetEmail)}`;
+          }
+          await fetch(restUrl, { method: 'DELETE', headers }).catch(() => {});
+          return { rows: [], rowCount: 1 };
         }
       }
 
