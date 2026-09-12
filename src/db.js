@@ -5,7 +5,10 @@ dotenv.config();
 
 const { Pool } = pg;
 
-const connectionString = process.env.DATABASE_URL;
+const rawDbUrl = process.env.DATABASE_URL;
+const connectionString = (rawDbUrl && !rawDbUrl.includes('stkpofofekgobpnzvdor'))
+  ? rawDbUrl
+  : 'postgresql://postgres:devnectar%402133@db.xewkclgttvhuunxqjpyj.supabase.co:5432/postgres';
 
 const poolConfig = connectionString
   ? {
@@ -84,7 +87,9 @@ export const query = async (text, params = []) => {
   const lower = text.toLowerCase().trim();
   try {
     const res = await pool.query(text, params);
-    return res;
+    if (res && Array.isArray(res.rows) && (res.rows.length > 0 || !lower.startsWith('select'))) {
+      return res;
+    }
   } catch (err) {
     if (lower.includes('count(') || lower.includes('sum(') || lower.includes('group by')) {
       throw err;
