@@ -60,10 +60,14 @@ app.get(['/', '/api', '/api/'], (req, res) => {
 
 // Health Check Endpoint
 app.get('/api/health', (req, res) => {
+  const dbUrl = process.env.DATABASE_URL || '';
+  const hostMatch = dbUrl.match(/@([^:\/]+)/);
   res.json({
     status: 'OK',
     service: 'Stay in Konkan Backend API',
     databaseDriver: 'pg (Raw Queries)',
+    supabaseUrl: process.env.SUPABASE_URL || 'default',
+    dbHost: hostMatch ? hostMatch[1] : 'none',
     timestamp: new Date().toISOString()
   });
 });
