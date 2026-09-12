@@ -94,6 +94,10 @@ export const query = async (text, params = []) => {
     };
 
     try {
+      if (lower.startsWith('alter') || lower.startsWith('create') || lower.startsWith('drop') || lower.startsWith('truncate')) {
+        return { rows: [], rowCount: 0 };
+      }
+
       // 1. SELECT Query Fallback with Parameter Filtering
       if (lower.startsWith('select')) {
         let selectCols = '*';
