@@ -6,9 +6,9 @@ dotenv.config();
 const { Pool } = pg;
 
 const rawDbUrl = process.env.DATABASE_URL;
-const connectionString = (rawDbUrl && !rawDbUrl.includes('stkpofofekgobpnzvdor'))
+const connectionString = (rawDbUrl && !rawDbUrl.includes('xewkclgttvhuunxqjpyj'))
   ? rawDbUrl
-  : 'postgresql://postgres:devnectar%402133@db.xewkclgttvhuunxqjpyj.supabase.co:5432/postgres';
+  : 'postgresql://postgres.stkpofofekgobpnzvdor:devnectar%402133@aws-0-ap-northeast-1.pooler.supabase.com:5432/postgres';
 
 const poolConfig = connectionString
   ? {
@@ -26,8 +26,8 @@ const poolConfig = connectionString
 
 export const pool = new Pool(poolConfig);
 
-export const SUPABASE_URL = 'https://xewkclgttvhuunxqjpyj.supabase.co';
-export const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inhld2tjbGd0dHZodXVueHFqcHlqIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4OTEwNDUwMSwiZXhwIjoyMTA0NjgwNTAxfQ.Nd6z9PNM9Bz0f8T0BAJcuqfPeVv2phRXZ1Oc2SuU6cI';
+export const SUPABASE_URL = process.env.SUPABASE_URL || 'https://stkpofofekgobpnzvdor.supabase.co';
+export const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN0a3BvZm9mZWtnb2Jwbnp2ZG9yIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4ODM0MzM0NywiZXhwIjoyMTAzOTE5MzQ3fQ.6HSILO2x0sp7mVSfXemMZTn648MpcCDcK8z4JYtX9fc';
 
 export const userBankMap = new Map();
 
