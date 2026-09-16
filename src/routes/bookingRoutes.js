@@ -8,7 +8,7 @@ import { sendBookingConfirmationEmail, sendBookingStatusEmail, sendHostBookingNo
  */
 export const normalizeBookingStatus = (b) => {
   if (!b) return b;
-  const status = String(b.status || 'confirmed').toLowerCase().trim();
+  const status = String(b.status || 'pending').toLowerCase().trim();
   return {
     ...b,
     status: status
@@ -48,7 +48,7 @@ const ensureBookingsTable = async () => {
         remaining_amount VARCHAR(100),
         payment_id VARCHAR(255),
         payment_status VARCHAR(100),
-        status VARCHAR(50) DEFAULT 'confirmed',
+        status VARCHAR(50) DEFAULT 'pending',
         confirmation_email_sent BOOLEAN DEFAULT FALSE,
         host_email_sent BOOLEAN DEFAULT FALSE,
         last_emailed_status VARCHAR(50),

@@ -654,8 +654,8 @@ router.delete('/:id', async (req, res) => {
 
     // Direct Supabase REST DELETE request failsafe
     try {
-      const supabaseUrl = process.env.SUPABASE_URL || 'https://stkpofofekgobpnzvdor.supabase.co';
-      const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN0a3BvZm9mZWtnb2Jwbnp2ZG9yIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4ODM0MzM0NywiZXhwIjoyMTAzOTE5MzQ3fQ.6HSILO2x0sp7mVSfXemMZTn648MpcCDcK8z4JYtX9fc';
+      const supabaseUrl = process.env.SUPABASE_URL || 'https://xewkclgttvhuunxqjpyj.supabase.co';
+      const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inhld2tjbGd0dHZodXVueHFqcHlqIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4OTEwNDUwMSwiZXhwIjoyMTA4NjgwNTAxfQ.Nd6z9PNM9Bz0f8T0BAJcuqfPeVv2phRXZ1Oc2SuU6cI';
       if (supabaseUrl && supabaseKey) {
         const headers = { 'apikey': supabaseKey, 'Authorization': `Bearer ${supabaseKey}` };
         await fetch(`${supabaseUrl}/rest/v1/properties?or=(id.eq.${encodeURIComponent(cleanId)},id.eq.${encodeURIComponent(rawIdNoPrefix)},id.eq.${encodeURIComponent(propIdWithPrefix)},title.eq.${encodeURIComponent(cleanId)})`, {

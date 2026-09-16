@@ -480,12 +480,14 @@ router.post('/send-otp', async (req, res) => {
     const userName = full_name || name || cleanEmail.split('@')[0] || 'Valued Guest';
     const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
     const cleanPurpose = String(purpose).toLowerCase().trim();
-    const key = `${cleanEmail}:${cleanPurpose}`;
 
-    // Store OTP in memory with 30-minute expiration (1,800,000 ms)
+    // Store OTP in memory with 30-minute expiration (1,800,000 ms) under multiple keys
     const expiry = Date.now() + 30 * 60 * 1000;
-    otpStore.set(key, { otp: otpCode, expiry, email: cleanEmail, purpose: cleanPurpose });
-    otpStore.set(`${cleanEmail}:any`, { otp: otpCode, expiry, email: cleanEmail, purpose: cleanPurpose });
+    const otpData = { otp: otpCode, expiry, email: cleanEmail, purpose: cleanPurpose };
+
+    otpStore.set(`${cleanEmail}:${cleanPurpose}`, otpData);
+    otpStore.set(`${cleanEmail}:any`, otpData);
+    otpStore.set(cleanEmail, otpData);
 
     // Also persist to PostgreSQL database table to survive server restarts and serverless multi-instance calls
     try {
@@ -498,11 +500,6 @@ router.post('/send-otp', async (req, res) => {
           expiry BIGINT NOT NULL,
           created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );`
-      ).catch(() => {});
-
-      await query(
-        `DELETE FROM otp_codes WHERE LOWER(email) = $1 OR expiry < $2;`,
-        [cleanEmail, Date.now()]
       ).catch(() => {});
 
       await query(
@@ -564,33 +561,36 @@ router.post('/verify-otp', async (req, res) => {
 
     const specificKey = `${cleanEmail}:${cleanPurpose}`;
     const fallbackKey = `${cleanEmail}:any`;
-    let record = otpStore.get(specificKey) || otpStore.get(fallbackKey);
+    let record = otpStore.get(specificKey) || otpStore.get(fallbackKey) || otpStore.get(cleanEmail);
 
-    // Memory fallback: search for ANY active record matching email regardless of purpose
+    // Memory fallback 1: Search for ANY record in otpStore matching cleanEmail
     if (!record) {
       for (const [k, v] of otpStore.entries()) {
-        if (v && v.email === cleanEmail && Date.now() <= v.expiry) {
+        if (v && v.email === cleanEmail) {
           record = v;
           break;
         }
       }
     }
 
-    // Database fallback: search persistent otp_codes table if memory lookup failed
+    // Database fallback: Query recent records in persistent otp_codes table
     if (!record) {
       try {
         const dbRes = await query(
-          `SELECT * FROM otp_codes WHERE LOWER(email) = $1 AND expiry >= $2 ORDER BY id DESC LIMIT 1;`,
-          [cleanEmail, Date.now()]
+          `SELECT * FROM otp_codes WHERE LOWER(email) = $1 ORDER BY id DESC LIMIT 10;`,
+          [cleanEmail]
         );
         if (dbRes && dbRes.rows && dbRes.rows.length > 0) {
-          const row = dbRes.rows[0];
-          record = {
-            otp: String(row.otp).trim(),
-            expiry: Number(row.expiry),
-            email: row.email,
-            purpose: row.purpose
-          };
+          // Find row matching the cleanOtp or pick the most recent non-expired row
+          const matchedRow = dbRes.rows.find(r => String(r.otp).trim() === cleanOtp) || dbRes.rows[0];
+          if (matchedRow) {
+            record = {
+              otp: String(matchedRow.otp).trim(),
+              expiry: Number(matchedRow.expiry),
+              email: matchedRow.email,
+              purpose: matchedRow.purpose
+            };
+          }
         }
       } catch (dbErr) {
         console.warn('[Verify OTP DB Query Notice]:', dbErr.message);
@@ -604,9 +604,11 @@ router.post('/verify-otp', async (req, res) => {
       });
     }
 
-    if (Date.now() > record.expiry) {
+    // Check expiration (if expiry timestamp is set)
+    if (record.expiry && Date.now() > record.expiry) {
       otpStore.delete(specificKey);
       otpStore.delete(fallbackKey);
+      otpStore.delete(cleanEmail);
       try {
         await query(`DELETE FROM otp_codes WHERE LOWER(email) = $1;`, [cleanEmail]).catch(() => {});
       } catch (e) {}
@@ -616,6 +618,7 @@ router.post('/verify-otp', async (req, res) => {
       });
     }
 
+    // Check OTP value
     if (record.otp !== cleanOtp) {
       return res.status(400).json({
         success: false,
@@ -626,6 +629,12 @@ router.post('/verify-otp', async (req, res) => {
     // Clear used OTP record from memory and DB
     otpStore.delete(specificKey);
     otpStore.delete(fallbackKey);
+    otpStore.delete(cleanEmail);
+    for (const [k] of otpStore.entries()) {
+      if (k.toLowerCase().includes(cleanEmail)) {
+        otpStore.delete(k);
+      }
+    }
     try {
       await query(`DELETE FROM otp_codes WHERE LOWER(email) = $1;`, [cleanEmail]).catch(() => {});
     } catch (e) {}

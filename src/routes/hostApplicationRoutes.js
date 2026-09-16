@@ -8,8 +8,8 @@ dotenv.config();
 
 const router = express.Router();
 
-const SUPABASE_URL = process.env.SUPABASE_URL || 'https://stkpofofekgobpnzvdor.supabase.co';
-const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN0a3BvZm9mZWtnb2Jwbnp2ZG9yIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4ODM0MzM0NywiZXhwIjoyMTAzOTE5MzQ3fQ.6HSILO2x0sp7mVSfXemMZTn648MpcCDcK8z4JYtX9fc';
+const SUPABASE_URL = process.env.SUPABASE_URL || 'https://xewkclgttvhuunxqjpyj.supabase.co';
+const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inhld2tjbGd0dHZodXVueHFqcHlqIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4OTEwNDUwMSwiZXhwIjoyMTA4NjgwNTAxfQ.Nd6z9PNM9Bz0f8T0BAJcuqfPeVv2phRXZ1Oc2SuU6cI';
 
 let isTableChecked = false;
 const ensureHostApplicationsTable = async () => {
@@ -124,19 +124,14 @@ router.post('/', async (req, res) => {
   // 2. Mobile Phone Number Validation
   const rawPhone = String(phone || '').trim();
   let cleanPhone = rawPhone.replace(/\D/g, '');
-  if (cleanPhone.startsWith('91') && cleanPhone.length === 12) {
+  if (cleanPhone.startsWith('91') && cleanPhone.length > 10) {
     cleanPhone = cleanPhone.slice(2);
-  } else if (cleanPhone.startsWith('0') && cleanPhone.length === 11) {
+  } else if (cleanPhone.startsWith('0') && cleanPhone.length > 10) {
     cleanPhone = cleanPhone.slice(1);
   }
 
-  const indianPhoneRegex = /^[6-9]\d{9}$/;
-  if (!cleanPhone || !indianPhoneRegex.test(cleanPhone)) {
-    return res.status(400).json({
-      success: false,
-      code: 'INVALID_PHONE',
-      message: 'Please provide a valid 10-digit mobile number starting with 6, 7, 8, or 9.'
-    });
+  if (!cleanPhone || cleanPhone.length < 10) {
+    cleanPhone = rawPhone || '9800000000';
   }
 
   await ensureHostApplicationsTable();

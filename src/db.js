@@ -5,15 +5,18 @@ dotenv.config();
 
 const { Pool } = pg;
 
-const rawDbUrl = process.env.DATABASE_URL;
+const rawDbUrl = process.env.DATABASE_URL || '';
 const connectionString = (rawDbUrl && !rawDbUrl.includes('stkpofofekgobpnzvdor'))
   ? rawDbUrl
-  : 'postgresql://postgres:devnectar%402133@db.xewkclgttvhuunxqjpyj.supabase.co:5432/postgres';
+  : 'postgresql://postgres.xewkclgttvhuunxqjpyj:devnectar%402133@aws-0-ap-south-1.pooler.supabase.com:6543/postgres';
 
 const poolConfig = connectionString
   ? {
       connectionString,
-      ssl: { rejectUnauthorized: false }
+      ssl: { rejectUnauthorized: false },
+      max: 10,
+      idleTimeoutMillis: 10000,
+      connectionTimeoutMillis: 5000
     }
   : {
       host: process.env.PGHOST || 'localhost',
@@ -21,15 +24,27 @@ const poolConfig = connectionString
       user: process.env.PGUSER || 'postgres',
       password: process.env.PGPASSWORD || '',
       database: process.env.PGDATABASE || 'stay_in_konkan',
-      ssl: false
+      ssl: false,
+      max: 10,
+      idleTimeoutMillis: 10000,
+      connectionTimeoutMillis: 5000
     };
 
 export const pool = new Pool(poolConfig);
 
-export const SUPABASE_URL = 'https://xewkclgttvhuunxqjpyj.supabase.co';
-export const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inhld2tjbGd0dHZodXVueHFqcHlqIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4OTEwNDUwMSwiZXhwIjoyMTA0NjgwNTAxfQ.Nd6z9PNM9Bz0f8T0BAJcuqfPeVv2phRXZ1Oc2SuU6cI';
+const rawSupabaseUrl = process.env.SUPABASE_URL || '';
+export const SUPABASE_URL = (rawSupabaseUrl && !rawSupabaseUrl.includes('stkpofofekgobpnzvdor'))
+  ? rawSupabaseUrl
+  : 'https://xewkclgttvhuunxqjpyj.supabase.co';
+
+const rawSupabaseKey = process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_KEY || '';
+export const SUPABASE_KEY = (rawSupabaseKey && rawSupabaseKey.length > 50 && !rawSupabaseKey.includes('stkpofofekgobpnzvdor'))
+  ? rawSupabaseKey
+  : 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inhld2tjbGd0dHZodXVueHFqcHlqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODkxMDQ1MDEsImV4cCI6MjEwNDY4MDUwMX0.d4stwTETHQGmuPtZrjk-okevXyFF6TR6DpqTXFI1W7w';
 
 export const userBankMap = new Map();
+
+let pgDisabled = false;
 
 export async function cleanupCorruptedUserRoles() {
   try {
@@ -78,14 +93,20 @@ const detectTable = (text) => {
 
 export const query = async (text, params = []) => {
   const lower = text.toLowerCase().trim();
-  try {
-    const res = await pool.query(text, params);
-    if (res && Array.isArray(res.rows) && (res.rows.length > 0 || !lower.startsWith('select'))) {
-      return res;
-    }
-  } catch (err) {
-    if (lower.includes('count(') || lower.includes('sum(') || lower.includes('group by')) {
-      throw err;
+
+  if (!pgDisabled) {
+    try {
+      const pgPromise = pool.query(text, params);
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('PG_TIMEOUT')), 1500)
+      );
+      const res = await Promise.race([pgPromise, timeoutPromise]);
+      if (res && Array.isArray(res.rows) && (res.rows.length > 0 || !lower.startsWith('select'))) {
+        return res;
+      }
+    } catch (err) {
+      pgDisabled = true;
+      setTimeout(() => { pgDisabled = false; }, 60000);
     }
   }
 
@@ -520,7 +541,7 @@ export const query = async (text, params = []) => {
 
         // 3.6 UPDATE Bookings Status Fallback
         if (lower.startsWith('update bookings')) {
-          let status = 'confirmed';
+          let status = 'pending';
           let targetIds = [];
 
           params.forEach(p => {
@@ -679,7 +700,7 @@ export const query = async (text, params = []) => {
 
         // 4.45 UPDATE Bookings Status Fallback
         if (lower.startsWith('update bookings')) {
-          let status = 'confirmed';
+          let status = 'pending';
           let targetIds = [];
 
           params.forEach(p => {
