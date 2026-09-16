@@ -167,7 +167,7 @@ export const query = async (text, params = []) => {
                     return loc.includes(cleanP0);
                   });
                 }
-              } else if (lower.includes('email = $1') || lower.includes('user_email = $1') || lower.includes('host_email = $1') || lower.includes('id = $1') || lower.includes('applicant_email = $1') || lower.includes('lower(email) = $1') || lower.includes('$1')) {
+              } else if (lower.includes('email = $1') || lower.includes('user_email = $1') || lower.includes('host_email = $1') || lower.includes('id = $1') || lower.includes('applicant_email = $1') || lower.includes('lower(email) = $1') || lower.includes('lower(id) = $1')) {
                 rows = rows.filter(r => {
                   const rEmail = (r.email || r.user_email || r.applicant_email || r.guest_email || '').toLowerCase().trim();
                   const rId = (r.id || r.booking_id || r.application_id || r.issue_id || r.error_id || '').toLowerCase().trim();
