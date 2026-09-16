@@ -167,6 +167,8 @@ export const query = async (text, params = []) => {
                     return loc.includes(cleanP0);
                   });
                 }
+              } else if (lower.includes('title')) {
+                rows = rows.filter(r => r && (r.title || r.name || '').toLowerCase().trim() === cleanP0);
               } else if (lower.includes('email = $1') || lower.includes('user_email = $1') || lower.includes('host_email = $1') || lower.includes('id = $1') || lower.includes('applicant_email = $1') || lower.includes('lower(email) = $1') || lower.includes('lower(id) = $1')) {
                 rows = rows.filter(r => {
                   const rEmail = (r.email || r.user_email || r.applicant_email || r.guest_email || '').toLowerCase().trim();
@@ -174,7 +176,14 @@ export const query = async (text, params = []) => {
                   const rHostEmail = (r.host_email || r.owner_email || '').toLowerCase().trim();
                   return rEmail === p0 || rId === p0 || rHostEmail === p0;
                 });
+              } else if (lower.includes('where')) {
+                rows = [];
               }
+            }
+
+            if (params && params.length > 1 && params[1] !== undefined && lower.includes('id !=')) {
+              const p1 = String(params[1]).toLowerCase().trim();
+              rows = rows.filter(r => r && String(r.id || '').toLowerCase().trim() !== p1);
             }
 
             // Filter properties by live/approved status if status condition in SQL
