@@ -53,7 +53,7 @@ export function generateBookingEmailHTML(booking, options = {}) {
   const totalAmount = Number(booking.total_amount || booking.total_price || booking.totalAmount || booking.total || 0).toLocaleString('en-IN');
   const paidAmount = Number(booking.paid_amount || booking.paidAmount || booking.paid || booking.total_amount || booking.total || 0).toLocaleString('en-IN');
 
-  const rawStatus = String(booking.status || 'confirmed').toLowerCase().trim();
+  const rawStatus = String(booking.status || 'pending').toLowerCase().trim();
 
   // Dynamic status display configuration
   let statusBadgeText = '✓ Booking Confirmed';
@@ -78,10 +78,13 @@ export function generateBookingEmailHTML(booking, options = {}) {
     buttonText = 'Share Your Feedback';
     showFeedbackButton = true;
   } else if (rawStatus === 'cancelled' || rawStatus === 'rejected' || rawStatus === 'cancellation_pending' || rawStatus === 'requested') {
-    statusBadgeText = '❌ Booking Cancelled';
+    const isHost = String(booking.cancellation_reason || '').toLowerCase().includes('host') || rawStatus === 'rejected';
+    statusBadgeText = rawStatus === 'rejected' ? '❌ Booking Declined by Host' : (isHost ? '❌ Cancelled by Host (100% Refund)' : '❌ Booking Cancelled');
     statusBadgeBg = '#ef4444';
-    displayStatusName = 'Booking Cancelled';
-    statusMessage = 'Your reservation has been cancelled. If you have any questions or require assistance with refund details, please feel free to contact us.';
+    displayStatusName = rawStatus === 'rejected' ? 'Booking Declined by Host' : (isHost ? 'Cancelled by Host (100% Refund)' : 'Booking Cancelled');
+    statusMessage = isHost 
+      ? `Your booking was cancelled/declined by the Host. A 100% Full Refund of ₹${paidAmount} has been approved and initiated to your original payment method.`
+      : 'Your reservation has been cancelled. If you have any questions or require assistance with refund details, please feel free to contact us.';
     buttonText = 'View My Bookings';
     showFeedbackButton = false;
   } else if (rawStatus === 'confirmed') {
@@ -229,7 +232,7 @@ export async function sendBookingStatusEmail(booking, oldStatus = null, options 
   const customerEmail = (booking.user_email || booking.customerEmail || booking.guest_email || booking.email || '').trim();
   const customerName = (booking.user_name || booking.customerName || booking.guest_name || 'Valued Guest').trim();
   const bookingId = booking.booking_id || booking.id || 'SIK-BOOKING';
-  const newStatus = String(booking.status || 'confirmed').toLowerCase().trim();
+  const newStatus = String(booking.status || 'pending').toLowerCase().trim();
   const cleanOldStatus = oldStatus ? String(oldStatus).toLowerCase().trim() : null;
 
   if (!customerEmail || !customerEmail.includes('@')) {

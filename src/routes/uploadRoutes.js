@@ -4,8 +4,8 @@ import dotenv from 'dotenv';
 dotenv.config();
 const router = express.Router();
 
-const SUPABASE_URL = process.env.SUPABASE_URL || 'https://stkpofofekgobpnzvdor.supabase.co';
-const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN0a3BvZm9mZWtnb2Jwbnp2ZG9yIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4ODM0MzM0NywiZXhwIjoyMTAzOTE5MzQ3fQ.6HSILO2x0sp7mVSfXemMZTn648MpcCDcK8z4JYtX9fc';
+const SUPABASE_URL = process.env.SUPABASE_URL || 'https://xewkclgttvhuunxqjpyj.supabase.co';
+const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inhld2tjbGd0dHZodXVueHFqcHlqIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4OTEwNDUwMSwiZXhwIjoyMTA4NjgwNTAxfQ.Nd6z9PNM9Bz0f8T0BAJcuqfPeVv2phRXZ1Oc2SuU6cI';
 
 const ALLOWED_BUCKETS = ['properties', 'host-applications', 'avatars', 'documents', 'wishlists', 'issues'];
 

@@ -175,28 +175,32 @@ router.post('/', async (req, res) => {
 
   // Declare and initialise mutable variables
   let baseReason = cancellation_reason || cancellationReason || reason || 'Guest requested cancellation';
-  const isHostCancelled = String(baseReason).toLowerCase().includes('host cancel') ||
-    String(status || '').toLowerCase() === 'approved';
+  const isHostCancelled = String(baseReason).toLowerCase().includes('host') ||
+    String(baseReason).toLowerCase().includes('decline') ||
+    String(baseReason).toLowerCase().includes('reject') ||
+    String(status || '').toLowerCase() === 'approved' ||
+    String(status || '').toLowerCase() === 'rejected';
+
   let rawPct = parseInt(refund_percentage !== undefined && refund_percentage !== null
     ? refund_percentage
     : (refundPercentage !== undefined && refundPercentage !== null ? refundPercentage : 0), 10);
   let rawRefund = parseFloat(refund_amount || refundAmount || 0);
 
-  // If refund not explicitly provided, calculate from percentage
-  if (rawRefund <= 0 && rawPct > 0 && finalPaid > 0) {
-    rawRefund = Math.round(finalPaid * rawPct / 100);
-  }
-
-  // Strict Enforce: Refund percentage cannot exceed 80% (20% platform fee non-refundable)
-  if (rawPct > 80) rawPct = 80;
-  const maxAllowedRefund = Math.round(finalPaid * 0.80);
-  if (rawRefund > maxAllowedRefund && maxAllowedRefund > 0) rawRefund = maxAllowedRefund;
-
   if (isHostCancelled) {
-    rawPct = 80;
-    rawRefund = Math.round(finalPaid * 0.80);
+    // 100% Full Refund when Host cancels or declines
+    rawPct = 100;
+    rawRefund = finalPaid;
     if (!baseReason.toLowerCase().includes('host')) {
-      baseReason = `Host cancelled booking (80% Refund Policy: ₹${rawRefund})`;
+      baseReason = `Host cancelled booking (100% Full Refund Policy: ₹${rawRefund})`;
+    }
+  } else {
+    // Guest-initiated cancellation: cap at 80% maximum refund
+    if (rawPct > 80) rawPct = 80;
+    const maxAllowedRefund = Math.round(finalPaid * 0.80);
+    if (rawRefund > maxAllowedRefund && maxAllowedRefund > 0) rawRefund = maxAllowedRefund;
+
+    if (rawRefund <= 0 && rawPct > 0 && finalPaid > 0) {
+      rawRefund = Math.round(finalPaid * rawPct / 100);
     }
   }
 
