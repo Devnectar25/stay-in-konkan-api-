@@ -6,7 +6,7 @@ dotenv.config();
 const { Pool } = pg;
 
 const rawDbUrl = process.env.DATABASE_URL || '';
-const connectionString = (rawDbUrl && !rawDbUrl.includes('stkpofofekgobpnzvdor'))
+const connectionString = (rawDbUrl && rawDbUrl.includes('xewkclgttvhuunxqjpyj'))
   ? rawDbUrl
   : 'postgresql://postgres.xewkclgttvhuunxqjpyj:devnectar%402133@aws-0-ap-south-1.pooler.supabase.com:6543/postgres';
 
@@ -33,12 +33,12 @@ const poolConfig = connectionString
 export const pool = new Pool(poolConfig);
 
 const rawSupabaseUrl = process.env.SUPABASE_URL || '';
-export const SUPABASE_URL = (rawSupabaseUrl && !rawSupabaseUrl.includes('stkpofofekgobpnzvdor'))
+export const SUPABASE_URL = (rawSupabaseUrl && rawSupabaseUrl.includes('xewkclgttvhuunxqjpyj'))
   ? rawSupabaseUrl
   : 'https://xewkclgttvhuunxqjpyj.supabase.co';
 
 const rawSupabaseKey = process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_KEY || '';
-export const SUPABASE_KEY = (rawSupabaseKey && rawSupabaseKey.length > 50 && !rawSupabaseKey.includes('stkpofofekgobpnzvdor'))
+export const SUPABASE_KEY = (rawSupabaseKey && rawSupabaseKey.length > 50 && rawSupabaseKey.includes('xewkclgttvhuunxqjpyj'))
   ? rawSupabaseKey
   : 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inhld2tjbGd0dHZodXVueHFqcHlqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODkxMDQ1MDEsImV4cCI6MjEwNDY4MDUwMX0.d4stwTETHQGmuPtZrjk-okevXyFF6TR6DpqTXFI1W7w';
 
