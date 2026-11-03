@@ -509,6 +509,14 @@ router.post('/', async (req, res) => {
       primary, status
     ]);
 
+    // RETURNING * gives the saved row; no row means the database did not store it — never report a fake success
+    if (!result || !Array.isArray(result.rows) || result.rows.length === 0) {
+      return res.status(503).json({
+        success: false,
+        message: 'Bank details could not be saved to the database. Please try again shortly.'
+      });
+    }
+
     // 2. Sync to users table columns
     try {
       await query(

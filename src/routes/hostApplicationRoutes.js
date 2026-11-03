@@ -9,7 +9,9 @@ dotenv.config();
 const router = express.Router();
 
 const SUPABASE_URL = process.env.SUPABASE_URL || 'https://xewkclgttvhuunxqjpyj.supabase.co';
-const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inhld2tjbGd0dHZodXVueHFqcHlqIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4OTEwNDUwMSwiZXhwIjoyMTA4NjgwNTAxfQ.Nd6z9PNM9Bz0f8T0BAJcuqfPeVv2phRXZ1Oc2SuU6cI';
+const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+// Fallback when the service key is missing/invalid; the host-applications bucket accepts uploads with the anon key
+const ANON_KEY = process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_KEY || '';
 
 let isTableChecked = false;
 const ensureHostApplicationsTable = async () => {
@@ -72,16 +74,32 @@ async function uploadDocToBucket(fileData, origName) {
     const fileBuffer = Buffer.from(base64Payload, 'base64');
 
     const uploadEndpoint = `${SUPABASE_URL}/storage/v1/object/host-applications/${uniqueFileName}`;
-    const uploadRes = await fetch(uploadEndpoint, {
+    const tryUpload = (key) => fetch(uploadEndpoint, {
       method: 'POST',
       headers: {
         'Content-Type': contentType,
-        'Authorization': `Bearer ${SERVICE_KEY}`,
-        'apikey': SERVICE_KEY,
+        'Authorization': `Bearer ${key}`,
+        'apikey': key,
         'x-upsert': 'true'
       },
       body: fileBuffer
     });
+
+    // Service key first; if Supabase rejects it (e.g. wrong/rotated key), retry with the anon key
+    const keys = [SERVICE_KEY, ANON_KEY].filter((k, i, arr) => k && arr.indexOf(k) === i);
+    let uploadRes = null;
+    let detail = '';
+    for (const key of keys) {
+      uploadRes = await tryUpload(key);
+      if (uploadRes.ok) break;
+      detail = await uploadRes.text().catch(() => '');
+      console.error(`[HostApp Upload Error] ${uploadRes.status} for ${origName}: ${detail.slice(0, 200)}`);
+    }
+
+    // Only return a link when Supabase actually stored the file
+    if (!uploadRes || !uploadRes.ok) {
+      return null;
+    }
 
     const publicUrl = `${SUPABASE_URL}/storage/v1/object/public/host-applications/${uniqueFileName}`;
     return publicUrl;
@@ -130,8 +148,37 @@ router.post('/', async (req, res) => {
     cleanPhone = cleanPhone.slice(1);
   }
 
-  if (!cleanPhone || cleanPhone.length < 10) {
-    cleanPhone = rawPhone || '9800000000';
+  if (!/^[6-9]\d{9}$/.test(cleanPhone) || /^(\d){9}$/.test(cleanPhone)) {
+    return res.status(400).json({
+      success: false,
+      code: 'INVALID_PHONE',
+      message: 'Please provide a valid 10-digit mobile number starting with 6, 7, 8 or 9.'
+    });
+  }
+
+  // 3. Verification documents: all three required, PDF/JPG/PNG, max 1 MB each (decoded)
+  const DOC_SPECS = [
+    { label: 'Property document', name: propertyDocName, data: propertyDocData, url: propertyDocUrl },
+    { label: 'GST document', name: gstDocName, data: gstDocData, url: gstDocUrl },
+    { label: 'Aadhaar / PAN card', name: idProofDocName || identityDocName, data: idProofDocData || identityDocData, url: identityDocUrl || idProofDocUrl }
+  ];
+  for (const d of DOC_SPECS) {
+    if (d.url && /^https:\/\//.test(d.url)) continue; // already uploaded earlier
+    if (!d.data || typeof d.data !== 'string' || !d.data.startsWith('data:')) {
+      return res.status(400).json({ success: false, code: 'MISSING_DOCUMENT', message: `${d.label} is required. Please attach the file.` });
+    }
+    const mime = d.data.slice(5, d.data.indexOf(';')).toLowerCase();
+    if (!['application/pdf', 'image/png', 'image/jpeg', 'image/jpg'].includes(mime)) {
+      return res.status(400).json({ success: false, code: 'INVALID_DOCUMENT_TYPE', message: `${d.label} must be a PDF, JPG or PNG file.` });
+    }
+    const b64 = d.data.split(';base64,')[1] || '';
+    const bytes = Math.floor((b64.length * 3) / 4);
+    if (bytes === 0) {
+      return res.status(400).json({ success: false, code: 'EMPTY_DOCUMENT', message: `${d.label} is empty. Please attach it again.` });
+    }
+    if (bytes > 1024 * 1024 + 1024) {
+      return res.status(400).json({ success: false, code: 'DOCUMENT_TOO_LARGE', message: `${d.label} is larger than 1 MB. Please upload a smaller file.` });
+    }
   }
 
   await ensureHostApplicationsTable();
@@ -163,6 +210,21 @@ router.post('/', async (req, res) => {
     gstDocUrl ? Promise.resolve(gstDocUrl) : uploadDocToBucket(gstDocData, gstDocName || 'gst_cert.pdf'),
     (identityDocUrl || idProofDocUrl) ? Promise.resolve(identityDocUrl || idProofDocUrl) : uploadDocToBucket(idProofDocData || identityDocData, idProofDocName || identityDocName || 'aadhaar.pdf')
   ]);
+
+  // If the applicant attached a file but it could not be stored, stop here so they can retry —
+  // never save an application whose documents silently went missing.
+  const failedDocs = [
+    [propertyDocData, finalPropDocUrl, 'property document'],
+    [gstDocData, finalGstDocUrl, 'GST certificate'],
+    [idProofDocData || identityDocData, finalIdentityDocUrl, 'ID proof']
+  ].filter(([data, url]) => data && !url).map(([, , label]) => label);
+  if (failedDocs.length > 0) {
+    return res.status(502).json({
+      success: false,
+      code: 'DOCUMENT_UPLOAD_FAILED',
+      message: `We couldn't upload your ${failedDocs.join(', ')}. Please try again in a few minutes.`
+    });
+  }
 
   try {
     const rawSql = `

@@ -1,5 +1,5 @@
 import express from 'express';
-import { query } from '../db.js';
+import { query, pool } from '../db.js';
 
 const router = express.Router();
 
@@ -79,7 +79,7 @@ router.get('/', async (req, res) => {
     const dbApps = appsRes.rows || [];
 
     // 4. Fetch properties to associate property counts and location
-    const propsRes = await query(`SELECT id, title, host, host_name, host_email, host_phone, location FROM properties;`).catch(() => ({ rows: [] }));
+    const propsRes = await query(`SELECT id, title, host_name, host_email, host_phone, location FROM properties WHERE LOWER(COALESCE(status, '')) NOT IN ('disabled', 'rejected', 'removed');`).catch(() => ({ rows: [] }));
     const props = propsRes.rows || [];
 
     // Default system hosts fallback
@@ -139,7 +139,7 @@ router.get('/', async (req, res) => {
           id: `host_${pEmail.replace(/[^a-zA-Z0-9]/g, '_')}`,
           full_name: p.host_name || p.host || pEmail.split('@')[0],
           email: pEmail,
-          phone: p.host_phone || '+91 98765 43210',
+          phone: p.host_phone || '',
           location: p.location || 'Konkan Region',
           verified: true,
           status: 'active',
@@ -154,17 +154,20 @@ router.get('/', async (req, res) => {
         const email = (h.email || '').toLowerCase().trim();
         const name = (h.full_name || h.name || '').toLowerCase().trim();
 
+        // Match stays by host email; fall back to the name only for stays that have no host email
+        // (two different hosts can share a name, e.g. two "Kuldeep Mahajan" accounts).
         const matchingProps = props.filter(p => {
           const pEmail = (p.host_email || '').toLowerCase().trim();
           const pName = (p.host || p.host_name || '').toLowerCase().trim();
-          return (email && pEmail === email) || (name && pName === name);
+          if (pEmail) return Boolean(email) && pEmail === email;
+          return Boolean(name) && pName === name;
         });
 
         return {
           id: h.id || `host_${email.replace(/[^a-zA-Z0-9]/g, '_')}`,
           full_name: h.full_name || h.name || email.split('@')[0],
           email: h.email,
-          phone: h.phone || '+91 98765 43210',
+          phone: h.phone || '',
           location: h.location || matchingProps[0]?.location || 'Konkan Region',
           total_properties: matchingProps.length,
           verified: h.verified !== false,
@@ -450,13 +453,62 @@ router.delete('/:id/bank-details', async (req, res) => {
  */
 router.delete('/:id', async (req, res) => {
   await ensureHostsTable();
-  const { id } = req.params;
+  const rawId = decodeURIComponent(String(req.params.id || '')).trim();
+  if (!rawId) return res.status(400).json({ success: false, message: 'Host id or email is required' });
+
+  // A host is listed if they appear in ANY of: hosts, host_accounts, users (role host),
+  // approved host_applications, or as host_email on a stay. Remove all of them together,
+  // otherwise the host reappears on the next refresh.
+  const client = await pool.connect();
   try {
-    await query(`DELETE FROM hosts WHERE id = $1 OR LOWER(email) = LOWER($1);`, [id]);
-    return res.json({ success: true, message: 'Host account deleted successfully' });
+    let email = rawId.includes('@') ? rawId.toLowerCase() : '';
+    if (!email) {
+      const found = await client.query(
+        `SELECT LOWER(email) AS email FROM hosts WHERE id = $1
+         UNION SELECT LOWER(email) FROM host_accounts WHERE id = $1
+         UNION SELECT LOWER(applicant_email) FROM host_applications WHERE id::text = $1
+         UNION SELECT LOWER(email) FROM users WHERE id = $1 LIMIT 1`, [rawId]);
+      email = found.rows[0]?.email || '';
+    }
+    if (!email) {
+      return res.status(404).json({ success: false, message: 'Host not found' });
+    }
+
+    await client.query('BEGIN');
+    const r1 = await client.query('DELETE FROM hosts WHERE LOWER(email) = $1 OR id = $2', [email, rawId]);
+    const r2 = await client.query('DELETE FROM host_accounts WHERE LOWER(email) = $1 OR id = $2', [email, rawId]);
+    const r3 = await client.query(
+      "UPDATE host_applications SET status = 'removed' WHERE LOWER(applicant_email) = $1 AND LOWER(COALESCE(status, '')) IN ('approved', 'pending', 'submitted', '')", [email]);
+    const r4 = await client.query(
+      "UPDATE users SET role = 'guest' WHERE LOWER(email) = $1 AND LOWER(COALESCE(role, '')) IN ('host', 'owner')", [email]);
+    // Delete the host's stays, plus wishlist entries and reviews that point at them.
+    // Bookings are kept as payment history (they store the stay name themselves).
+    const ownStays = await client.query('SELECT id FROM properties WHERE LOWER(host_email) = $1', [email]);
+    const stayIds = ownStays.rows.map(r => String(r.id));
+    if (stayIds.length) {
+      await client.query('DELETE FROM wishlists WHERE property_id = ANY($1)', [stayIds]);
+      await client.query('DELETE FROM reviews WHERE property_id = ANY($1)', [stayIds]);
+    }
+    const r5 = await client.query('DELETE FROM properties WHERE LOWER(host_email) = $1 RETURNING id, title', [email]);
+    if (r1.rowCount + r2.rowCount + r3.rowCount + r4.rowCount + r5.rowCount === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, message: `No host found for ${email}` });
+    }
+    await client.query('COMMIT');
+
+    return res.json({
+      success: true,
+      message: 'Host removed',
+      email,
+      removed: { hosts: r1.rowCount, hostAccounts: r2.rowCount, applications: r3.rowCount, roleReset: r4.rowCount },
+      deletedStays: r5.rows
+    });
   } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
     console.error('Delete host error:', error);
-    return res.status(500).json({ success: false, message: error.message });
+    return res.status(500).json({ success: false, message: error.message || 'Could not remove host' });
+  } finally {
+    client.release();
   }
 });
 

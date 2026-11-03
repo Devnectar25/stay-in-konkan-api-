@@ -6,9 +6,12 @@ dotenv.config();
 const { Pool } = pg;
 
 const rawDbUrl = process.env.DATABASE_URL || '';
-const connectionString = (rawDbUrl && rawDbUrl.includes('xewkclgttvhuunxqjpyj'))
-  ? rawDbUrl
-  : 'postgresql://postgres.xewkclgttvhuunxqjpyj:devnectar%402133@aws-0-ap-south-1.pooler.supabase.com:6543/postgres';
+// Only connect to the Stay in Konkan project. The connection string must come from the environment
+// (Supabase -> Project Settings -> Database -> Session pooler, e.g. aws-0-ap-northeast-2.pooler.supabase.com:5432).
+const connectionString = (rawDbUrl && rawDbUrl.includes('xewkclgttvhuunxqjpyj')) ? rawDbUrl : null;
+if (!connectionString) {
+  console.error('[db] DATABASE_URL is missing or not for project xewkclgttvhuunxqjpyj — Postgres disabled, using REST fallback only.');
+}
 
 const poolConfig = connectionString
   ? {
@@ -44,7 +47,7 @@ export const SUPABASE_KEY = (rawSupabaseKey && rawSupabaseKey.length > 50 && raw
 
 export const userBankMap = new Map();
 
-let pgDisabled = false;
+let pgDisabled = !connectionString;
 
 export async function cleanupCorruptedUserRoles() {
   try {
@@ -95,18 +98,30 @@ export const query = async (text, params = []) => {
   const lower = text.toLowerCase().trim();
 
   if (!pgDisabled) {
+    let timer;
     try {
       const pgPromise = pool.query(text, params);
-      const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('PG_TIMEOUT')), 1500)
-      );
+      const timeoutPromise = new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error('PG_TIMEOUT')), 10000);
+      });
       const res = await Promise.race([pgPromise, timeoutPromise]);
-      if (res && Array.isArray(res.rows) && (res.rows.length > 0 || !lower.startsWith('select'))) {
+      clearTimeout(timer);
+      // Postgres is the source of truth: an empty result is a real answer, not a failure
+      if (res && Array.isArray(res.rows)) {
         return res;
       }
     } catch (err) {
-      pgDisabled = true;
-      setTimeout(() => { pgDisabled = false; }, 60000);
+      clearTimeout(timer);
+      // Only treat it as an outage when the connection itself failed; a single slow query or
+      // SQL error must not switch every following query to the approximate REST fallback.
+      const msg = String(err && err.message || '');
+      const isConnectionError = /PG_TIMEOUT|ECONNREFUSED|ENOTFOUND|ETIMEDOUT|ECONNRESET|EAI_AGAIN|tenant|terminated|Connection terminated|password authentication/i.test(msg)
+        || ['ECONNREFUSED', 'ENOTFOUND', 'ETIMEDOUT', 'ECONNRESET', 'EAI_AGAIN', '28P01', 'XX000'].includes(err && err.code);
+      if (isConnectionError) {
+        console.warn('[db] Postgres unavailable, using REST fallback for 30s:', msg);
+        pgDisabled = true;
+        setTimeout(() => { pgDisabled = !connectionString; }, 30000);
+      }
     }
   }
 
