@@ -1,17 +1,24 @@
 import express from 'express';
 import crypto from 'crypto';
 import dotenv from 'dotenv';
-import { query } from '../db.js';
+import { query, SUPABASE_URL as DB_SUPABASE_URL, SUPABASE_KEY as DB_SUPABASE_KEY } from '../db.js';
 import { sendHostApplicationStatusEmail } from '../services/emailService.js';
 
 dotenv.config();
 
 const router = express.Router();
 
-const SUPABASE_URL = process.env.SUPABASE_URL || 'https://xewkclgttvhuunxqjpyj.supabase.co';
-const SERVICE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+// Only ever use storage settings that belong to the Stay in Konkan project. A stale Vercel variable
+// pointing at an old project would otherwise send every upload to the wrong place and fail.
+const PROJECT_REF = 'xewkclgttvhuunxqjpyj';
+const keyRef = (k) => {
+  try { return JSON.parse(Buffer.from(String(k).split('.')[1], 'base64url').toString('utf8')).ref || ''; } catch (e) { return ''; }
+};
+const forProject = (k) => (k && keyRef(k) === PROJECT_REF ? k : '');
+const SUPABASE_URL = String(process.env.SUPABASE_URL || '').includes(PROJECT_REF) ? process.env.SUPABASE_URL : DB_SUPABASE_URL;
+const SERVICE_KEY = forProject(process.env.SUPABASE_SERVICE_ROLE_KEY);
 // Fallback when the service key is missing/invalid; the host-applications bucket accepts uploads with the anon key
-const ANON_KEY = process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_KEY || '';
+const ANON_KEY = forProject(process.env.SUPABASE_ANON_KEY) || forProject(process.env.SUPABASE_KEY) || DB_SUPABASE_KEY;
 
 let isTableChecked = false;
 const ensureHostApplicationsTable = async () => {
