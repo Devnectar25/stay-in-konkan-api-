@@ -7,41 +7,43 @@ const router = express.Router();
 const SUPABASE_URL = process.env.SUPABASE_URL || 'https://xewkclgttvhuunxqjpyj.supabase.co';
 const SUPABASE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inhld2tjbGd0dHZodXVueHFqcHlqIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4OTEwNDUwMSwiZXhwIjoyMTA8NjgwNTAxfQ.Nd6z9PNM9Bz0f8T0BAJcuqfPeVv2phRXZ1Oc2SuU6cI';
 
-/**
- * Ensures application_errors table exists in database
- */
+let tableInitPromise = null;
 async function ensureErrorTableExists() {
-  try {
-    await query(`
-      CREATE TABLE IF NOT EXISTS application_errors (
-        id VARCHAR(255) PRIMARY KEY,
-        error_id VARCHAR(255) UNIQUE NOT NULL,
-        message TEXT NOT NULL,
-        error_type VARCHAR(100) DEFAULT 'UnhandledError',
-        stack_trace TEXT,
-        endpoint TEXT,
-        http_method VARCHAR(20),
-        status_code INT DEFAULT 500,
-        user_id VARCHAR(255),
-        user_email VARCHAR(255),
-        browser TEXT,
-        device TEXT,
-        environment VARCHAR(50) DEFAULT 'production',
-        severity VARCHAR(50) DEFAULT 'Medium',
-        status VARCHAR(50) DEFAULT 'New',
-        resolved_at TIMESTAMP WITH TIME ZONE,
-        resolved_by VARCHAR(255),
-        developer_notes TEXT,
-        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-      );
-    `);
-    
-    await query(`CREATE INDEX IF NOT EXISTS idx_app_errors_created_at ON application_errors(created_at DESC);`);
-    await query(`CREATE INDEX IF NOT EXISTS idx_app_errors_severity ON application_errors(severity);`);
-    await query(`CREATE INDEX IF NOT EXISTS idx_app_errors_status ON application_errors(status);`);
-  } catch (err) {
-    console.warn('[Error Tracking Table Init Note]:', err.message);
-  }
+  if (tableInitPromise) return tableInitPromise;
+  tableInitPromise = (async () => {
+    try {
+      await query(`
+        CREATE TABLE IF NOT EXISTS application_errors (
+          id VARCHAR(255) PRIMARY KEY,
+          error_id VARCHAR(255) UNIQUE NOT NULL,
+          message TEXT NOT NULL,
+          error_type VARCHAR(100) DEFAULT 'UnhandledError',
+          stack_trace TEXT,
+          endpoint TEXT,
+          http_method VARCHAR(20),
+          status_code INT DEFAULT 500,
+          user_id VARCHAR(255),
+          user_email VARCHAR(255),
+          browser TEXT,
+          device TEXT,
+          environment VARCHAR(50) DEFAULT 'production',
+          severity VARCHAR(50) DEFAULT 'Medium',
+          status VARCHAR(50) DEFAULT 'New',
+          resolved_at TIMESTAMP WITH TIME ZONE,
+          resolved_by VARCHAR(255),
+          developer_notes TEXT,
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+        );
+      `);
+      
+      await query(`CREATE INDEX IF NOT EXISTS idx_app_errors_created_at ON application_errors(created_at DESC);`);
+      await query(`CREATE INDEX IF NOT EXISTS idx_app_errors_severity ON application_errors(severity);`);
+      await query(`CREATE INDEX IF NOT EXISTS idx_app_errors_status ON application_errors(status);`);
+    } catch (err) {
+      console.warn('[Error Tracking Table Init Note]:', err.message);
+    }
+  })();
+  return tableInitPromise;
 }
 
 // Auto init table structure
