@@ -71,15 +71,14 @@ router.get('/', async (req, res) => {
         WHERE LOWER(status) = 'approved'
         ORDER BY created_at DESC;
       `).catch(() => ({ rows: [] })),
-      query(`SELECT id, title, host, host_name, host_email, host_phone, location FROM properties;`).catch(() => ({ rows: [] }))
+      // Stays used for host discovery and listing counts (hidden/removed stays are ignored; there is no "host" column)
+      query(`SELECT id, title, host_name, host_email, host_phone, location FROM properties WHERE LOWER(COALESCE(status, '')) NOT IN ('disabled', 'rejected', 'removed');`).catch(() => ({ rows: [] }))
     ]);
 
     const dbHosts = hostsRes.rows || [];
     const dbUsers = usersRes.rows || [];
     const dbApps = appsRes.rows || [];
 
-    // 4. Fetch properties to associate property counts and location
-    const propsRes = await query(`SELECT id, title, host_name, host_email, host_phone, location FROM properties WHERE LOWER(COALESCE(status, '')) NOT IN ('disabled', 'rejected', 'removed');`).catch(() => ({ rows: [] }));
     const props = propsRes.rows || [];
 
     // Default system hosts fallback

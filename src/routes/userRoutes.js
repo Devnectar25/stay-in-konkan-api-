@@ -24,11 +24,12 @@ router.get('/check-email', async (req, res) => {
 
     const result = await query(rawSql, [email.trim()]);
 
-    if (result.rows.length > 0) {
+    const match = (result.rows || []).find(r => String(r?.email || '').trim().toLowerCase() === email.trim().toLowerCase());
+    if (match) {
       return res.json({
         success: true,
         exists: true,
-        user: result.rows[0]
+        user: match
       });
     }
 
@@ -77,11 +78,11 @@ router.post('/login', async (req, res) => {
     const rawSql = `SELECT id, email, full_name, avatar_url, role, provider, verified, password_hash FROM users WHERE LOWER(email) = LOWER($1)`;
     const result = await query(rawSql, [cleanEmail]);
 
-    if (result.rows.length === 0) {
+    // Never trust row order: pick the row for THIS email (a fallback query may return unrelated rows)
+    const user = (result.rows || []).find(r => String(r?.email || '').trim().toLowerCase() === cleanEmail);
+    if (!user) {
       return res.status(401).json({ success: false, reason: 'USER_NOT_FOUND', message: 'No account found with this email.' });
     }
-
-    const user = result.rows[0];
 
     if (!user.password_hash) {
       // Account exists but has no password (e.g. created via OAuth / seed without hash)
