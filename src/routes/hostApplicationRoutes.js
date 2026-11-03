@@ -155,7 +155,7 @@ router.post('/', async (req, res) => {
     cleanPhone = cleanPhone.slice(1);
   }
 
-  if (!/^[6-9]\d{9}$/.test(cleanPhone) || /^(\d){9}$/.test(cleanPhone)) {
+  if (!/^[6-9]\d{9}$/.test(cleanPhone) || /^(\d)\1{9}$/.test(cleanPhone)) {
     return res.status(400).json({
       success: false,
       code: 'INVALID_PHONE',

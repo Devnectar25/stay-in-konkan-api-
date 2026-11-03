@@ -184,7 +184,7 @@ export const query = async (text, params = []) => {
                 }
               } else if (lower.includes('title')) {
                 rows = rows.filter(r => r && (r.title || r.name || '').toLowerCase().trim() === cleanP0);
-              } else if (/(email|id)\)?\s*=\s*(lower\(\s*)?\$1/.test(lower)) {
+              } else if (/(email|id)\)?\s*=\s*(lower\(\s*)?\$1\b/.test(lower)) {
                 rows = rows.filter(r => {
                   const rEmail = (r.email || r.user_email || r.applicant_email || r.guest_email || '').toLowerCase().trim();
                   const rId = (r.id || r.booking_id || r.application_id || r.issue_id || r.error_id || '').toLowerCase().trim();
