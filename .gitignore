@@ -22,3 +22,8 @@ tmp/
 
 # Vercel
 .vercel/
+
+# Data backups (contain personal data)
+scripts/backups/
+# One-off data migration / cleanup scripts (kept locally, not in source control)
+scripts/local/
