@@ -94,6 +94,9 @@ const detectTable = (text) => {
   return '';
 };
 
+/** True when a direct Postgres connection for this project is configured and not in a fallback window. */
+export const hasPostgres = () => Boolean(connectionString) && !pgDisabled;
+
 export const query = async (text, params = []) => {
   const lower = text.toLowerCase().trim();
 

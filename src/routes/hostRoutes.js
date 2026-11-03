@@ -1,5 +1,5 @@
 import express from 'express';
-import { query, pool } from '../db.js';
+import { query, pool, hasPostgres, SUPABASE_URL, SUPABASE_KEY } from '../db.js';
 
 const router = express.Router();
 
@@ -75,11 +75,15 @@ router.get('/', async (req, res) => {
       query(`SELECT id, title, host_name, host_email, host_phone, location FROM properties WHERE LOWER(COALESCE(status, '')) NOT IN ('disabled', 'rejected', 'removed');`).catch(() => ({ rows: [] }))
     ]);
 
+    // Re-apply every WHERE condition in code: when the API reads through its REST fallback, queries
+    // without parameters come back unfiltered (all users, all applications), which would list guests
+    // and pending applicants as hosts.
+    const lc = (v) => String(v || '').toLowerCase().trim();
+    const props = (propsRes.rows || []).filter(p => !['disabled', 'rejected', 'removed'].includes(lc(p.status)));
+    const stayOwnerEmails = new Set(props.map(p => lc(p.host_email)).filter(Boolean));
     const dbHosts = hostsRes.rows || [];
-    const dbUsers = usersRes.rows || [];
-    const dbApps = appsRes.rows || [];
-
-    const props = propsRes.rows || [];
+    const dbUsers = (usersRes.rows || []).filter(u => ['host', 'owner'].includes(lc(u.role)) || stayOwnerEmails.has(lc(u.email)));
+    const dbApps = (appsRes.rows || []).filter(a => lc(a.status) === 'approved');
 
     // Default system hosts fallback
     const defaultHosts = [
@@ -477,6 +481,36 @@ router.delete('/:id/bank-details', async (req, res) => {
  * DELETE /api/hosts/:id
  * Delete a host account
  */
+// Remove a host through the Supabase REST API (used when no direct Postgres connection is available,
+// e.g. while DATABASE_URL on Vercel points at another project). Mirrors the SQL transaction below.
+const removeHostViaRest = async (email) => {
+  const base = `${SUPABASE_URL}/rest/v1`;
+  const headers = { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', Prefer: 'return=representation' };
+  const enc = encodeURIComponent;
+  const call = async (method, path, body) => {
+    const r = await fetch(`${base}/${path}`, { method, headers, body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(15000) });
+    if (!r.ok) throw new Error(`${method} ${path.split('?')[0]} failed (${r.status}): ${(await r.text()).slice(0, 160)}`);
+    const t = await r.text();
+    return t ? JSON.parse(t) : [];
+  };
+  const stays = await call('GET', `properties?select=id,title&host_email=ilike.${enc(email)}`);
+  const stayIds = stays.map(s => String(s.id));
+  if (stayIds.length) {
+    const inList = `in.(${stayIds.map(id => `"${id}"`).join(',')})`;
+    await call('DELETE', `wishlists?property_id=${enc(inList)}`);
+    await call('DELETE', `reviews?property_id=${enc(inList)}`);
+  }
+  const r1 = await call('DELETE', `hosts?email=ilike.${enc(email)}`);
+  const r2 = await call('DELETE', `host_accounts?email=ilike.${enc(email)}`);
+  const r3 = await call('PATCH', `host_applications?applicant_email=ilike.${enc(email)}&status=in.(approved,pending,submitted)`, { status: 'removed' });
+  const r4 = await call('PATCH', `users?email=ilike.${enc(email)}&role=in.(host,owner)`, { role: 'guest' });
+  const r5 = stayIds.length ? await call('DELETE', `properties?host_email=ilike.${enc(email)}`) : [];
+  return {
+    removed: { hosts: r1.length, hostAccounts: r2.length, applications: r3.length, roleReset: r4.length },
+    deletedStays: r5.map(p => ({ id: p.id, title: p.title }))
+  };
+};
+
 router.delete('/:id', async (req, res) => {
   await ensureHostsTable();
   const rawId = decodeURIComponent(String(req.params.id || '')).trim();
@@ -485,6 +519,21 @@ router.delete('/:id', async (req, res) => {
   // A host is listed if they appear in ANY of: hosts, host_accounts, users (role host),
   // approved host_applications, or as host_email on a stay. Remove all of them together,
   // otherwise the host reappears on the next refresh.
+  // No direct database connection: use the REST path (an email is required there)
+  if (!hasPostgres()) {
+    const email = rawId.includes('@') ? rawId.toLowerCase() : '';
+    if (!email) return res.status(400).json({ success: false, message: 'Please remove the host by email address.' });
+    try {
+      const out = await removeHostViaRest(email);
+      const total = out.removed.hosts + out.removed.hostAccounts + out.removed.applications + out.removed.roleReset + out.deletedStays.length;
+      if (total === 0) return res.status(404).json({ success: false, message: `No host found for ${email}` });
+      return res.json({ success: true, message: 'Host removed', email, ...out });
+    } catch (error) {
+      console.error('Delete host (REST) error:', error);
+      return res.status(500).json({ success: false, message: error.message || 'Could not remove host' });
+    }
+  }
+
   const client = await pool.connect();
   try {
     let email = rawId.includes('@') ? rawId.toLowerCase() : '';
