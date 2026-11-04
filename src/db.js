@@ -190,7 +190,7 @@ export const query = async (text, params = []) => {
               } else if (/(email|id)\)?\s*=\s*(lower\(\s*)?\$1\b/.test(lower)) {
                 rows = rows.filter(r => {
                   const rEmail = (r.email || r.user_email || r.applicant_email || r.guest_email || '').toLowerCase().trim();
-                  const rId = (r.id || r.booking_id || r.application_id || r.issue_id || r.error_id || '').toLowerCase().trim();
+                  const rId = String(r.id || r.booking_id || r.application_id || r.issue_id || r.error_id || '').toLowerCase().trim();
                   const rHostEmail = (r.host_email || r.owner_email || '').toLowerCase().trim();
                   return rEmail === p0 || rId === p0 || rHostEmail === p0;
                 });
@@ -271,6 +271,7 @@ export const query = async (text, params = []) => {
 
           return { rows, rowCount: rows.length };
         }
+      }
 
         // 1.5 INSERT INTO otp_codes Fallback
         if (lower.startsWith('insert into otp_codes')) {
@@ -292,7 +293,8 @@ export const query = async (text, params = []) => {
             const rows = await restRes.json().catch(() => []);
             return { rows: Array.isArray(rows) ? rows : [rows], rowCount: 1 };
           }
-          return { rows: [body], rowCount: 1 };
+          console.error('Supabase OTP save error:', restRes.status, (await restRes.text().catch(() => '')).slice(0, 200));
+          return { rows: [], rowCount: 0 };
         }
 
         // 1.6 DELETE FROM otp_codes Fallback
@@ -305,7 +307,6 @@ export const query = async (text, params = []) => {
           await fetch(restUrl, { method: 'DELETE', headers }).catch(() => {});
           return { rows: [], rowCount: 1 };
         }
-      }
 
         // 2. INSERT Host Applications Fallback
         if (lower.startsWith('insert into host_applications')) {
