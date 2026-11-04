@@ -503,10 +503,12 @@ router.post('/send-otp', async (req, res) => {
         );`
       ).catch(() => {});
 
-      await query(
+      const saved = await query(
         `INSERT INTO otp_codes (email, otp, purpose, expiry) VALUES ($1, $2, $3, $4);`,
         [cleanEmail, otpCode, cleanPurpose, expiry]
-      ).catch(() => {});
+      ).catch(() => null);
+      // Saved in the table: every API copy can verify it, so this copy's memory must not be trusted over the table
+      otpData.persisted = Boolean(saved && saved.rowCount > 0);
     } catch (dbErr) {
       console.warn('[Brevo OTP DB Notice]:', dbErr.message);
     }
@@ -562,65 +564,51 @@ router.post('/verify-otp', async (req, res) => {
 
     const specificKey = `${cleanEmail}:${cleanPurpose}`;
     const fallbackKey = `${cleanEmail}:any`;
-    let record = otpStore.get(specificKey) || otpStore.get(fallbackKey) || otpStore.get(cleanEmail);
-
-    // Memory fallback 1: Search for ANY record in otpStore matching cleanEmail
-    if (!record) {
-      for (const [k, v] of otpStore.entries()) {
-        if (v && v.email === cleanEmail) {
-          record = v;
-          break;
-        }
-      }
+    // The otp_codes table is the source of truth: Vercel runs several API copies with separate memory, so
+    // one copy's memory can hold an older code. Memory is only used for a code that could not be saved
+    // to the table, or when the table can't be reached.
+    const memoryRecord = otpStore.get(specificKey);
+    let tableRows = [];
+    let tableAnswered = false;
+    try {
+      const dbRes = await query(
+        `SELECT * FROM otp_codes WHERE LOWER(email) = $1 ORDER BY id DESC LIMIT 10;`,
+        [cleanEmail]
+      );
+      tableRows = (dbRes && dbRes.rows) || [];
+      tableAnswered = true;
+    } catch (dbErr) {
+      console.warn('[Verify OTP DB Query Notice]:', dbErr.message);
     }
 
-    // Database fallback: Query recent records in persistent otp_codes table
-    if (!record) {
-      try {
-        const dbRes = await query(
-          `SELECT * FROM otp_codes WHERE LOWER(email) = $1 ORDER BY id DESC LIMIT 10;`,
-          [cleanEmail]
-        );
-        if (dbRes && dbRes.rows && dbRes.rows.length > 0) {
-          // Find row matching the cleanOtp or pick the most recent non-expired row
-          const matchedRow = dbRes.rows.find(r => String(r.otp).trim() === cleanOtp) || dbRes.rows[0];
-          if (matchedRow) {
-            record = {
-              otp: String(matchedRow.otp).trim(),
-              expiry: Number(matchedRow.expiry),
-              email: matchedRow.email,
-              purpose: matchedRow.purpose
-            };
-          }
-        }
-      } catch (dbErr) {
-        console.warn('[Verify OTP DB Query Notice]:', dbErr.message);
-      }
+    const candidates = tableRows
+      .filter(r => String(r.purpose || '').toLowerCase().trim() === cleanPurpose)
+      .map(r => ({ otp: String(r.otp).trim(), expiry: Number(r.expiry) }));
+    if (memoryRecord && (!memoryRecord.persisted || !tableAnswered)) {
+      candidates.push({ otp: String(memoryRecord.otp).trim(), expiry: Number(memoryRecord.expiry) });
     }
 
-    if (!record) {
+    if (candidates.length === 0) {
       return res.status(400).json({
         success: false,
         message: 'No active OTP request found for this email address. Please click resend code.'
       });
     }
 
-    // Check expiration (if expiry timestamp is set)
-    if (record.expiry && Date.now() > record.expiry) {
-      otpStore.delete(specificKey);
-      otpStore.delete(fallbackKey);
-      otpStore.delete(cleanEmail);
-      try {
-        await query(`DELETE FROM otp_codes WHERE LOWER(email) = $1;`, [cleanEmail]).catch(() => {});
-      } catch (e) {}
-      return res.status(400).json({
-        success: false,
-        message: 'Verification code has expired. Please request a new code.'
-      });
-    }
+    const now = Date.now();
+    const isLive = (c) => !c.expiry || now <= c.expiry;
+    const matches = candidates.filter(c => c.otp === cleanOtp);
 
-    // Check OTP value
-    if (record.otp !== cleanOtp) {
+    if (!matches.some(isLive)) {
+      // Right code but too old, or every code on file has expired
+      if (matches.length > 0 || !candidates.some(isLive)) {
+        otpStore.delete(specificKey);
+        await query(`DELETE FROM otp_codes WHERE LOWER(email) = $1;`, [cleanEmail]).catch(() => {});
+        return res.status(400).json({
+          success: false,
+          message: 'Verification code has expired. Please request a new code.'
+        });
+      }
       return res.status(400).json({
         success: false,
         message: 'Invalid verification code. Please check your email and try again.'
