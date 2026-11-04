@@ -83,7 +83,10 @@ router.get('/', async (req, res) => {
     const stayOwnerEmails = new Set(props.map(p => lc(p.host_email)).filter(Boolean));
     const dbHosts = hostsRes.rows || [];
     const dbUsers = (usersRes.rows || []).filter(u => ['host', 'owner'].includes(lc(u.role)) || stayOwnerEmails.has(lc(u.email)));
-    const dbApps = (appsRes.rows || []).filter(a => lc(a.status) === 'approved');
+    // REST rows keep raw column names (applicant_email / applicant_name) instead of the SQL aliases
+    const dbApps = (appsRes.rows || [])
+      .filter(a => lc(a.status) === 'approved')
+      .map(a => ({ ...a, email: a.email || a.applicant_email, full_name: a.full_name || a.applicant_name }));
 
     // Default system hosts fallback
     const defaultHosts = [
@@ -510,6 +513,66 @@ const removeHostViaRest = async (email) => {
     deletedStays: r5.map(p => ({ id: p.id, title: p.title }))
   };
 };
+
+/**
+ * POST /api/hosts/:email/demote
+ * Take host status away (host records removed, application marked 'demoted', account role -> guest)
+ * and HIDE their stays (status 'disabled', reversible). Bookings and stays are kept.
+ */
+router.post('/:id/demote', async (req, res) => {
+  await ensureHostsTable();
+  const email = decodeURIComponent(String(req.params.id || '')).trim().toLowerCase();
+  if (!email.includes('@')) return res.status(400).json({ success: false, message: 'Please demote the host by email address.' });
+
+  if (!hasPostgres()) {
+    // REST path (no direct database connection)
+    try {
+      const base = `${SUPABASE_URL}/rest/v1`;
+      const headers = { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', Prefer: 'return=representation' };
+      const enc = encodeURIComponent;
+      const call = async (method, path, body) => {
+        const r = await fetch(`${base}/${path}`, { method, headers, body: body ? JSON.stringify(body) : undefined, signal: AbortSignal.timeout(15000) });
+        if (!r.ok) throw new Error(`${method} ${path.split('?')[0]} failed (${r.status}): ${(await r.text()).slice(0, 160)}`);
+        const t = await r.text();
+        return t ? JSON.parse(t) : [];
+      };
+      const r1 = await call('DELETE', `hosts?email=ilike.${enc(email)}`);
+      const r2 = await call('DELETE', `host_accounts?email=ilike.${enc(email)}`);
+      const r3 = await call('PATCH', `host_applications?applicant_email=ilike.${enc(email)}&status=in.(approved,pending,submitted)`, { status: 'demoted' });
+      const r4 = await call('PATCH', `users?email=ilike.${enc(email)}&role=in.(host,owner)`, { role: 'guest' });
+      const r5 = await call('PATCH', `properties?host_email=ilike.${enc(email)}&status=not.in.(disabled,rejected,removed)`, { status: 'disabled' });
+      if (r1.length + r2.length + r3.length + r4.length + r5.length === 0) {
+        return res.status(404).json({ success: false, message: `${email} is not a host` });
+      }
+      return res.json({ success: true, message: 'Host demoted to guest', email, hiddenStays: r5.map(x => ({ id: x.id, title: x.title })) });
+    } catch (error) {
+      console.error('Demote host (REST) error:', error);
+      return res.status(500).json({ success: false, message: error.message || 'Could not demote host' });
+    }
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const r1 = await client.query('DELETE FROM hosts WHERE LOWER(email) = $1', [email]);
+    const r2 = await client.query('DELETE FROM host_accounts WHERE LOWER(email) = $1', [email]);
+    const r3 = await client.query("UPDATE host_applications SET status = 'demoted' WHERE LOWER(applicant_email) = $1 AND LOWER(COALESCE(status, '')) IN ('approved', 'pending', 'submitted', '')", [email]);
+    const r4 = await client.query("UPDATE users SET role = 'guest' WHERE LOWER(email) = $1 AND LOWER(COALESCE(role, '')) IN ('host', 'owner')", [email]);
+    const r5 = await client.query("UPDATE properties SET status = 'disabled' WHERE LOWER(host_email) = $1 AND LOWER(COALESCE(status, '')) NOT IN ('disabled', 'rejected', 'removed') RETURNING id, title", [email]);
+    if (r1.rowCount + r2.rowCount + r3.rowCount + r4.rowCount + r5.rowCount === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, message: `${email} is not a host` });
+    }
+    await client.query('COMMIT');
+    return res.json({ success: true, message: 'Host demoted to guest', email, hiddenStays: r5.rows });
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('Demote host error:', error);
+    return res.status(500).json({ success: false, message: error.message || 'Could not demote host' });
+  } finally {
+    client.release();
+  }
+});
 
 router.delete('/:id', async (req, res) => {
   await ensureHostsTable();

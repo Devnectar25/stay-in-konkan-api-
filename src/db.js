@@ -325,17 +325,21 @@ export const query = async (text, params = []) => {
             property_doc_url: params[12] || undefined,
             gst_doc_url: params[13] || undefined,
             identity_doc_url: params[14] || undefined,
-            status: params[15] || 'pending'
+            status: params[15] || 'pending',
+            created_at: new Date().toISOString()
           };
-          const restRes = await fetch(`${SUPABASE_URL}/rest/v1/host_applications`, {
+          // Same as the SQL "ON CONFLICT (id) DO UPDATE": someone applying again updates their existing row.
+          // Columns left undefined are not sent, so earlier document links are kept (like COALESCE in the SQL).
+          const restRes = await fetch(`${SUPABASE_URL}/rest/v1/host_applications?on_conflict=id`, {
             method: 'POST',
-            headers,
+            headers: { ...headers, 'Prefer': 'resolution=merge-duplicates,return=representation' },
             body: JSON.stringify(body)
           });
           if (restRes.ok) {
             const rows = await restRes.json();
             return { rows: Array.isArray(rows) ? rows : [rows], rowCount: 1 };
           }
+          console.error('Supabase host application save error:', restRes.status, (await restRes.text().catch(() => '')).slice(0, 200));
         }
 
         // 2.5 INSERT / UPSERT Users Fallback

@@ -1,7 +1,7 @@
 import express from 'express';
 import crypto from 'crypto';
 import dotenv from 'dotenv';
-import { query, SUPABASE_URL as DB_SUPABASE_URL, SUPABASE_KEY as DB_SUPABASE_KEY } from '../db.js';
+import { query, hasPostgres, SUPABASE_URL as DB_SUPABASE_URL, SUPABASE_KEY as DB_SUPABASE_KEY } from '../db.js';
 import { sendHostApplicationStatusEmail } from '../services/emailService.js';
 
 dotenv.config();
@@ -282,6 +282,15 @@ router.post('/', async (req, res) => {
     const result = await query(rawSql, params);
     const createdApp = result.rows[0];
 
+    // Never report success unless the database really returned the saved application
+    if (!createdApp) {
+      return res.status(503).json({
+        success: false,
+        code: 'APPLICATION_NOT_SAVED',
+        message: 'We could not save your application. Please try again in a few minutes.'
+      });
+    }
+
     // Trigger automatic host application status email (non-blocking)
     sendHostApplicationStatusEmail(createdApp, null).catch(err => {
       console.error('[Host Application Email Trigger Error]:', err.message);
@@ -341,6 +350,48 @@ router.get('/user/:email', async (req, res) => {
  * PUT /api/host-applications/:id/status
  * Update status of a host application (approved / rejected / pending)
  */
+// Make an approved applicant a host: upsert into the hosts table (one row per email) and set users.role = 'host'.
+// Works with a direct Postgres connection and through the Supabase REST API (live fallback).
+async function recordApprovedHost(app) {
+  const email = String(app.applicant_email || '').trim().toLowerCase();
+  const row = {
+    id: `host_${email.replace(/[^a-z0-9]/g, '_')}`,
+    full_name: String(app.applicant_name || email.split('@')[0]).trim(),
+    email,
+    phone: app.phone || null,
+    location: app.location || null,
+    verified: true,
+    status: 'active'
+  };
+  if (hasPostgres()) {
+    await query(
+      `INSERT INTO hosts (id, full_name, email, phone, location, verified, status, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, true, 'active', NOW(), NOW())
+       ON CONFLICT (email) DO UPDATE SET full_name = EXCLUDED.full_name, phone = COALESCE(EXCLUDED.phone, hosts.phone),
+         location = COALESCE(EXCLUDED.location, hosts.location), verified = true, status = 'active', updated_at = NOW()`,
+      [row.id, row.full_name, row.email, row.phone, row.location]
+    );
+    await query("UPDATE users SET role = 'host' WHERE LOWER(email) = $1 AND LOWER(COALESCE(role, '')) NOT IN ('admin', 'subadmin')", [email]);
+    return;
+  }
+  const headers = { apikey: DB_SUPABASE_KEY, Authorization: `Bearer ${DB_SUPABASE_KEY}`, 'Content-Type': 'application/json' };
+  const base = `${DB_SUPABASE_URL}/rest/v1`;
+  const up = await fetch(`${base}/hosts?on_conflict=email`, {
+    method: 'POST',
+    headers: { ...headers, Prefer: 'resolution=merge-duplicates,return=minimal' },
+    body: JSON.stringify(row),
+    signal: AbortSignal.timeout(15000)
+  });
+  if (!up.ok) throw new Error(`hosts upsert failed (${up.status}): ${(await up.text()).slice(0, 160)}`);
+  const ur = await fetch(`${base}/users?email=ilike.${encodeURIComponent(email)}&role=not.in.(admin,subadmin)`, {
+    method: 'PATCH',
+    headers: { ...headers, Prefer: 'return=minimal' },
+    body: JSON.stringify({ role: 'host' }),
+    signal: AbortSignal.timeout(15000)
+  });
+  if (!ur.ok) throw new Error(`users role update failed (${ur.status}): ${(await ur.text()).slice(0, 160)}`);
+}
+
 router.put('/:id/status', async (req, res) => {
   const { id } = req.params;
   const { status } = req.body;
@@ -368,15 +419,15 @@ router.put('/:id/status', async (req, res) => {
 
     const appRecord = result.rows[0];
 
-    // If host application is approved, promote user role to 'host' in users table
-    if (status === 'approved' && appRecord && appRecord.applicant_email) {
+    // If host application is approved: add the host to the hosts table and promote the account to 'host'
+    let hostRecorded = null;
+    if (String(status).toLowerCase() === 'approved' && appRecord && appRecord.applicant_email) {
       try {
-        await query(
-          "UPDATE users SET role = 'host' WHERE LOWER(email) = LOWER($1)",
-          [appRecord.applicant_email]
-        );
-      } catch (uErr) {
-        console.warn('User role update note:', uErr.message);
+        await recordApprovedHost(appRecord);
+        hostRecorded = true;
+      } catch (hErr) {
+        hostRecorded = false;
+        console.error('Approved host could not be recorded in hosts table:', hErr.message);
       }
     }
 
@@ -393,6 +444,7 @@ router.put('/:id/status', async (req, res) => {
       success: true,
       message: `Host application status updated to ${status}`,
       application: appRecord,
+      hostRecorded,
       emailSent: emailResult && emailResult.success && !emailResult.skipped,
       emailDetails: emailResult
     });
