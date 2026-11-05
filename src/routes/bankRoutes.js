@@ -1,5 +1,6 @@
 import express from 'express';
 import { query } from '../db.js';
+import { rejectInvalidIfsc } from '../utils/ifsc.js';
 
 const router = express.Router();
 
@@ -428,7 +429,7 @@ router.get('/', async (req, res) => {
  * POST /api/bank-details
  * Save or update user/host bank details
  */
-router.post('/', async (req, res) => {
+router.post('/', rejectInvalidIfsc, async (req, res) => {
   try {
     await ensureBankDetailsTable();
 

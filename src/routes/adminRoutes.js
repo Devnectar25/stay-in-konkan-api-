@@ -1,5 +1,7 @@
 import express from 'express';
 import { query } from '../db.js';
+import { withRealRatings } from '../utils/ratings.js';
+import { applyBookingStatus, pickCancellations } from '../utils/bookingStatus.js';
 
 const router = express.Router();
 
@@ -317,11 +319,11 @@ router.get('/full-dashboard', async (req, res) => {
     ] = await Promise.all([
       query('SELECT p.*, u.full_name as owner_name, u.email as owner_email FROM properties p LEFT JOIN users u ON p.host_email = u.email ORDER BY p.created_at DESC').catch(() => ({ rows: [] })),
       query('SELECT * FROM users ORDER BY created_at DESC').catch(() => ({ rows: [] })),
-      query('SELECT * FROM bookings ORDER BY created_at DESC').catch(() => ({ rows: [] })),
+      query('SELECT * FROM bookings ORDER BY created_at DESC').catch(() => ({ rows: null })),
       query("SELECT * FROM host_applications WHERE LOWER(status) = 'pending' OR status IS NULL ORDER BY created_at DESC").catch(() => ({ rows: [] })),
       query('SELECT * FROM contact_messages ORDER BY created_at DESC').catch(() => ({ rows: [] })),
       query('SELECT * FROM newsletter_subscribers ORDER BY subscribed_at DESC').catch(() => query('SELECT * FROM newsletter_subscribers').catch(() => ({ rows: [] }))),
-      query('SELECT * FROM cancellations ORDER BY created_at DESC').catch(() => ({ rows: [] })),
+      query('SELECT * FROM cancellations ORDER BY created_at DESC').catch(() => ({ rows: null })),
       query('SELECT * FROM coupons ORDER BY created_at DESC').catch(() => ({ rows: [] })),
       query('SELECT * FROM subadmins ORDER BY created_at DESC').catch(() => ({ rows: [] })),
       query('SELECT * FROM reviews ORDER BY created_at DESC').catch(() => ({ rows: [] })),
@@ -329,15 +331,15 @@ router.get('/full-dashboard', async (req, res) => {
       query('SELECT * FROM help_desk ORDER BY created_at DESC').catch(() => query('SELECT * FROM "Help Desk" ORDER BY created_at DESC').catch(() => ({ rows: [] })))
     ]);
 
-    const properties = propsRes.rows || [];
+    const properties = await withRealRatings(propsRes.rows || []);
     const users = usersRes.rows || [];
-    const bookings = (bookingsRes.rows || []).map(normalizeBookingStatus);
+    const bookings = applyBookingStatus(bookingsRes.rows || [], cancelsRes1.rows || []);
     const applications = appsRes.rows || [];
     const messages = msgsRes.rows || [];
     const subscribers = subsRes.rows || [];
     const issues = helpDeskRes?.rows || [];
     
-    const cancellations = (cancelsRes1.rows || []).map(extractBankDetails);
+    const cancellations = pickCancellations(cancelsRes1.rows || []).map(extractBankDetails);
 
     const coupons = couponsRes.rows || [];
     const subadmins = (subsAdminsRes.rows || []).filter(s => {
@@ -385,6 +387,8 @@ router.get('/full-dashboard', async (req, res) => {
     return res.json({
       success: true,
       stats,
+      // false: bookings or cancellations could not be read, so the admin page keeps what it is showing
+      sync_ok: Boolean(bookingsRes.rows && cancelsRes1.rows),
       properties,
       users,
       bookings,
@@ -436,7 +440,7 @@ router.get('/properties', async (req, res) => {
       owner_name: p.owner_name || p.host || p.host_name || 'Registered Host',
       owner_email: p.owner_email || p.host_email || ''
     }));
-    return res.json({ success: true, count: propertiesList.length, properties: propertiesList });
+    return res.json({ success: true, count: propertiesList.length, properties: await withRealRatings(propertiesList) });
   } catch (err) {
     console.warn('[Admin API] Properties DB fallback:', err.message);
     res.json({

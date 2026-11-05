@@ -1,5 +1,6 @@
 import express from 'express';
 import { query, pool, hasPostgres, SUPABASE_URL, SUPABASE_KEY } from '../db.js';
+import { rejectInvalidIfsc } from '../utils/ifsc.js';
 
 const router = express.Router();
 
@@ -200,7 +201,7 @@ router.get('/', async (req, res) => {
  * POST /api/hosts
  * Create or update a host account
  */
-router.post('/', async (req, res) => {
+router.post('/', rejectInvalidIfsc, async (req, res) => {
   await ensureHostsTable();
   const { id, full_name, email, phone, location, bank_details, total_properties, verified, status, account_holder_name, account_number, branch_name, ifsc_code, bank_name } = req.body;
 
@@ -400,7 +401,7 @@ router.get('/:id/bank-details', async (req, res) => {
  * PUT /api/hosts/:id/bank-details
  * Save or update host bank details in PostgreSQL database
  */
-router.put('/:id/bank-details', async (req, res) => {
+router.put('/:id/bank-details', rejectInvalidIfsc, async (req, res) => {
   const { id } = req.params;
   const {
     account_holder_name,

@@ -1,6 +1,7 @@
 import express from 'express';
 import crypto from 'crypto';
 import { query } from '../db.js';
+import { withRealRatings } from '../utils/ratings.js';
 
 const router = express.Router();
 
@@ -119,7 +120,8 @@ router.get('/', async (req, res) => {
         rooms: parsedRooms
       };
     });
-    return res.json({ success: true, count: dbProperties.length, properties: dbProperties, data: dbProperties });
+    const ratedProperties = await withRealRatings(dbProperties);
+    return res.json({ success: true, count: ratedProperties.length, properties: ratedProperties, data: ratedProperties });
   } catch (error) {
     console.error('Fetch properties error:', error);
     return res.json({ success: true, count: 0, properties: [], data: [], notice: 'Database error' });
@@ -227,7 +229,8 @@ router.get('/:id', async (req, res) => {
     prop.facility3_image = (prop.facility3_image && prop.facility3_image.includes('/')) ? prop.facility3_image : (prop.facility3_image || '');
     prop.rooms = parsedRooms;
 
-    return res.json({ success: true, property: prop });
+    const [ratedProperty] = await withRealRatings([prop]);
+    return res.json({ success: true, property: ratedProperty });
   } catch (error) {
     console.error('Get property error:', error);
     return res.status(500).json({ success: false, message: error.message || 'Database error' });
