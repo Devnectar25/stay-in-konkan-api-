@@ -1,5 +1,6 @@
 import express from 'express';
-import { query } from '../db.js';
+import { query, hasPostgres, SUPABASE_URL, SUPABASE_KEY } from '../db.js';
+import { rejectInvalidIfsc } from '../utils/ifsc.js';
 import { generateToken } from '../utils/jwt.js';
 import { sendOtpEmail } from '../services/emailService.js';
 
@@ -20,7 +21,7 @@ router.get('/check-email', async (req, res) => {
   }
 
   try {
-    const rawSql = `SELECT id, email, full_name, avatar_url, role, provider, verified, password_hash FROM users WHERE LOWER(email) = LOWER($1)`;
+    const rawSql = `SELECT id, email, full_name, avatar_url, phone, role, provider, verified, password_hash FROM users WHERE LOWER(email) = LOWER($1)`;
 
     const result = await query(rawSql, [email.trim()]);
 
@@ -62,7 +63,12 @@ router.post('/login', async (req, res) => {
   }
 
   // Check if user is locked out due to 3 failed attempts
-  const attemptRecord = pwdAttemptsMap.get(cleanEmail);
+  let attemptRecord = pwdAttemptsMap.get(cleanEmail);
+  if (attemptRecord && attemptRecord.lockedUntil && Date.now() >= attemptRecord.lockedUntil) {
+    // The lock has ended: start again with 3 fresh attempts
+    pwdAttemptsMap.delete(cleanEmail);
+    attemptRecord = null;
+  }
   if (attemptRecord && attemptRecord.lockedUntil && Date.now() < attemptRecord.lockedUntil) {
     const remainingSec = Math.ceil((attemptRecord.lockedUntil - Date.now()) / 1000);
     return res.status(429).json({
@@ -75,7 +81,7 @@ router.post('/login', async (req, res) => {
   }
 
   try {
-    const rawSql = `SELECT id, email, full_name, avatar_url, role, provider, verified, password_hash FROM users WHERE LOWER(email) = LOWER($1)`;
+    const rawSql = `SELECT id, email, full_name, avatar_url, phone, role, provider, verified, password_hash FROM users WHERE LOWER(email) = LOWER($1)`;
     const result = await query(rawSql, [cleanEmail]);
 
     // Never trust row order: pick the row for THIS email (a fallback query may return unrelated rows)
@@ -151,6 +157,51 @@ router.post('/sync', async (req, res) => {
   const isVerified = verified !== undefined ? verified : false;
   const passHash = password_hash || password || null;
 
+  // Existing account: change only the fields that were actually sent. Filling in defaults here would
+  // overwrite a host's name and role during a password reset.
+  try {
+    const found = await query('SELECT * FROM users WHERE LOWER(email) = LOWER($1)', [cleanEmail]);
+    const existing = (found.rows || []).find(r => String(r?.email || '').trim().toLowerCase() === cleanEmail);
+    if (existing) {
+      const fields = {};
+      if (full_name) fields.full_name = full_name;
+      if (avatar_url) fields.avatar_url = avatar_url;
+      if (phone) fields.phone = phone;
+      if (role || explicitAdminEmails.includes(cleanEmail)) fields.role = userRole;
+      if (provider) fields.provider = provider;
+      if (verified !== undefined) fields.verified = verified;
+      if (passHash) fields.password_hash = passHash;
+      fields.updated_at = new Date().toISOString();
+
+      let saved = null;
+      if (hasPostgres()) {
+        const cols = Object.keys(fields);
+        const result = await query(
+          `UPDATE users SET ${cols.map((c, i) => `${c} = $${i + 1}`).join(', ')} WHERE LOWER(email) = LOWER($${cols.length + 1}) RETURNING *`,
+          [...cols.map(c => fields[c]), cleanEmail]
+        );
+        saved = result.rows?.[0] || null;
+      } else {
+        const patch = await fetch(`${SUPABASE_URL}/rest/v1/users?email=ilike.${encodeURIComponent(cleanEmail)}`, {
+          method: 'PATCH',
+          headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', Prefer: 'return=representation' },
+          body: JSON.stringify(fields),
+          signal: AbortSignal.timeout(15000)
+        });
+        if (patch.ok) saved = (await patch.json())?.[0] || null;
+        else console.error('Supabase user update error:', patch.status, (await patch.text().catch(() => '')).slice(0, 200));
+      }
+      if (!saved) {
+        return res.status(503).json({ success: false, message: 'Your account could not be updated. Please try again in a few minutes.' });
+      }
+      if (passHash) pwdAttemptsMap.delete(cleanEmail);
+      const { password_hash: _hidden, ...safeUser } = saved;
+      return res.json({ success: true, message: 'User synced successfully', user: safeUser });
+    }
+  } catch (lookupErr) {
+    console.warn('User sync lookup note:', lookupErr.message);
+  }
+
   try {
     // 1. Auto-create users table if missing
     await query(`
@@ -199,6 +250,89 @@ router.post('/sync', async (req, res) => {
       message: 'User synced locally',
       user: { id: userId, email: cleanEmail, full_name: name, role: userRole }
     });
+  }
+});
+
+const findUserByEmail = async (cleanEmail) => {
+  const found = await query('SELECT * FROM users WHERE LOWER(email) = LOWER($1)', [cleanEmail]);
+  return (found.rows || []).find(r => String(r?.email || '').trim().toLowerCase() === cleanEmail) || null;
+};
+
+// Only these fields leave the API: the row also holds the password hash and bank details
+const toProfile = (u) => ({
+  id: u.id,
+  full_name: u.full_name || '',
+  email: u.email,
+  phone: u.phone || '',
+  role: u.role,
+  updated_at: u.updated_at || null
+});
+
+/**
+ * GET /api/users/profile?email=
+ * The account's current name and phone, straight from the database.
+ */
+router.get('/profile', async (req, res) => {
+  const cleanEmail = String(req.query.email || '').trim().toLowerCase();
+  if (!cleanEmail) return res.status(400).json({ success: false, message: 'Email is required.' });
+  try {
+    const user = await findUserByEmail(cleanEmail);
+    if (!user) return res.status(404).json({ success: false, message: 'Account not found.' });
+    return res.json({ success: true, user: toProfile(user) });
+  } catch (error) {
+    console.error('Get profile error:', error);
+    return res.status(503).json({ success: false, message: 'Could not load your profile.' });
+  }
+});
+
+/**
+ * PUT /api/users/profile
+ * Updates name and phone. Email is the login identity and links bookings, so it cannot change here.
+ */
+router.put('/profile', async (req, res) => {
+  const { email, full_name, phone } = req.body || {};
+  const cleanEmail = String(email || '').trim().toLowerCase();
+  const name = String(full_name || '').trim().replace(/\s+/g, ' ');
+  const cleanPhone = String(phone || '').trim();
+
+  if (!cleanEmail) return res.status(400).json({ success: false, message: 'Email is required.' });
+  if (!/^\p{L}[\p{L}\p{M} .'-]{1,79}$/u.test(name)) {
+    return res.status(400).json({ success: false, message: 'Please enter a valid full name (2 to 80 letters).' });
+  }
+  if (cleanPhone && (!/^[6-9]\d{9}$/.test(cleanPhone) || /^(\d)\1{9}$/.test(cleanPhone))) {
+    return res.status(400).json({ success: false, message: 'Please enter a valid 10-digit mobile number starting with 6, 7, 8, or 9.' });
+  }
+
+  try {
+    const existing = await findUserByEmail(cleanEmail);
+    if (!existing) return res.status(404).json({ success: false, message: 'Account not found.' });
+
+    const updatedAt = new Date().toISOString();
+    let saved = null;
+    if (hasPostgres()) {
+      const result = await query(
+        'UPDATE users SET full_name = $1, phone = $2, updated_at = $3 WHERE LOWER(email) = LOWER($4) RETURNING *',
+        [name, cleanPhone || null, updatedAt, cleanEmail]
+      );
+      saved = result.rows?.[0] || null;
+    } else {
+      const patch = await fetch(`${SUPABASE_URL}/rest/v1/users?email=eq.${encodeURIComponent(existing.email)}`, {
+        method: 'PATCH',
+        headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', Prefer: 'return=representation' },
+        body: JSON.stringify({ full_name: name, phone: cleanPhone || null, updated_at: updatedAt }),
+        signal: AbortSignal.timeout(15000)
+      });
+      if (patch.ok) saved = (await patch.json())?.[0] || null;
+      else console.error('Supabase profile update error:', patch.status, (await patch.text().catch(() => '')).slice(0, 200));
+    }
+
+    if (!saved) {
+      return res.status(503).json({ success: false, message: 'Your profile could not be saved. Please try again in a few minutes.' });
+    }
+    return res.json({ success: true, message: 'Profile updated.', user: toProfile(saved) });
+  } catch (error) {
+    console.error('Update profile error:', error);
+    return res.status(503).json({ success: false, message: 'Your profile could not be saved. Please try again in a few minutes.' });
   }
 });
 
@@ -331,7 +465,7 @@ router.get('/:id/bank-details', async (req, res) => {
  * PUT /api/users/:id/bank-details
  * Save or update user refund banking details in PostgreSQL database
  */
-router.put('/:id/bank-details', async (req, res) => {
+router.put('/:id/bank-details', rejectInvalidIfsc, async (req, res) => {
   const { id } = req.params;
   const {
     account_holder_name,

@@ -199,6 +199,16 @@ CREATE TABLE IF NOT EXISTS public.subadmins (
 CREATE INDEX IF NOT EXISTS idx_subadmins_email ON public.subadmins(email);
 
 -- 8. Coupons Table
+-- One row per coupon per user: a user can redeem each coupon only once
+CREATE TABLE IF NOT EXISTS public.coupon_redemptions (
+    id SERIAL PRIMARY KEY,
+    coupon_code VARCHAR(100) NOT NULL,
+    user_email VARCHAR(255) NOT NULL,
+    booking_id VARCHAR(255),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    UNIQUE (coupon_code, user_email)
+);
+
 CREATE TABLE IF NOT EXISTS public.coupons (
     id VARCHAR(100) PRIMARY KEY,
     code VARCHAR(100) UNIQUE NOT NULL,

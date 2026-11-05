@@ -1,5 +1,5 @@
 import express from 'express';
-import { query } from '../db.js';
+import { query, hasPostgres, SUPABASE_URL, SUPABASE_KEY } from '../db.js';
 
 const router = express.Router();
 
@@ -49,6 +49,57 @@ async function ensureTableExists() {
     console.warn('[Coupons API] Table setup note:', e.message);
   }
 }
+
+// Each user can redeem a coupon once. coupon_redemptions has UNIQUE (coupon_code, user_email), so even
+// two simultaneous requests can't both succeed.
+const restHeaders = () => ({ apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json' });
+const cleanEmailOf = (v) => String(v || '').trim().toLowerCase();
+
+/** Coupon codes this user has already redeemed. Throws if the answer can't be determined. */
+const getRedeemedCodes = async (email) => {
+  if (hasPostgres()) {
+    const r = await query('SELECT coupon_code FROM coupon_redemptions WHERE user_email = $1', [email]);
+    return r.rows.map(x => x.coupon_code);
+  }
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/coupon_redemptions?select=coupon_code&user_email=eq.${encodeURIComponent(email)}`, { headers: restHeaders(), signal: AbortSignal.timeout(15000) });
+  if (!res.ok) throw new Error(`redemption lookup failed (${res.status})`);
+  return (await res.json()).map(x => x.coupon_code);
+};
+
+/** Record a redemption. Returns true if recorded, false if this user had already redeemed the coupon. */
+const recordRedemption = async (code, email, bookingId) => {
+  if (hasPostgres()) {
+    const r = await query(
+      'INSERT INTO coupon_redemptions (coupon_code, user_email, booking_id) VALUES ($1, $2, $3) ON CONFLICT (coupon_code, user_email) DO NOTHING RETURNING id',
+      [code, email, bookingId || null]
+    );
+    return r.rows.length > 0;
+  }
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/coupon_redemptions`, {
+    method: 'POST',
+    headers: { ...restHeaders(), Prefer: 'return=minimal' },
+    body: JSON.stringify({ coupon_code: code, user_email: email, booking_id: bookingId || null }),
+    signal: AbortSignal.timeout(15000)
+  });
+  if (res.status === 409) return false;
+  if (!res.ok) throw new Error(`redemption save failed (${res.status}): ${(await res.text()).slice(0, 160)}`);
+  return true;
+};
+
+/**
+ * GET /api/coupons/redeemed?email=
+ * Coupon codes this user has already used
+ */
+router.get('/redeemed', async (req, res) => {
+  const email = cleanEmailOf(req.query.email);
+  if (!email) return res.status(400).json({ success: false, message: 'Email is required.' });
+  try {
+    return res.json({ success: true, codes: await getRedeemedCodes(email) });
+  } catch (error) {
+    console.error('Redeemed coupons error:', error);
+    return res.status(503).json({ success: false, message: 'Could not check used coupons.' });
+  }
+});
 
 /**
  * GET /api/coupons
@@ -217,7 +268,7 @@ router.delete('/:id', async (req, res) => {
  * Validate coupon code for checkout
  */
 router.post('/validate', async (req, res) => {
-  const { code, bookingAmount } = req.body;
+  const { code, bookingAmount, email } = req.body;
   if (!code) {
     return res.status(400).json({ success: false, message: 'Coupon code is required.' });
   }
@@ -227,13 +278,17 @@ router.post('/validate', async (req, res) => {
 
   try {
     await ensureTableExists();
-    const result = await query('SELECT * FROM coupons WHERE UPPER(code) = $1 AND active = true LIMIT 1;', [cleanCode]);
+    const result = await query('SELECT * FROM coupons');
+    const coupon = (result.rows || []).find(c => String(c.code || '').toUpperCase().trim() === cleanCode && c.active !== false);
 
-    if (result.rows.length === 0) {
+    if (!coupon) {
       return res.status(404).json({ success: false, message: 'Invalid or expired coupon code.' });
     }
 
-    const coupon = result.rows[0];
+    const today = new Date().toISOString().split('T')[0];
+    if (coupon.expiry && String(coupon.expiry) < today) {
+      return res.status(400).json({ success: false, code: 'EXPIRED', message: `Coupon ${cleanCode} has expired.` });
+    }
 
     if (amount < parseFloat(coupon.min_booking || 0)) {
       return res.status(400).json({
@@ -244,6 +299,14 @@ router.post('/validate', async (req, res) => {
 
     if (coupon.times_used >= coupon.max_uses) {
       return res.status(400).json({ success: false, message: 'Coupon usage limit reached.' });
+    }
+
+    const userEmail = cleanEmailOf(email);
+    if (userEmail) {
+      const usedCodes = await getRedeemedCodes(userEmail);
+      if (usedCodes.includes(cleanCode)) {
+        return res.status(409).json({ success: false, code: 'ALREADY_USED', message: `You have already used coupon ${cleanCode}. Each coupon can be used once per account.` });
+      }
     }
 
     return res.json({
@@ -262,7 +325,7 @@ router.post('/validate', async (req, res) => {
  * Increment coupon usage count when booking is placed
  */
 router.post('/use', async (req, res) => {
-  const { code, id } = req.body;
+  const { code, id, email, booking_id } = req.body;
   const target = (id || code || '').trim();
   if (!target) {
     return res.status(400).json({ success: false, message: 'Coupon code or ID is required.' });
@@ -270,6 +333,15 @@ router.post('/use', async (req, res) => {
 
   try {
     await ensureTableExists();
+
+    const userEmail = cleanEmailOf(email);
+    if (userEmail) {
+      const recorded = await recordRedemption(String(code || target).toUpperCase().trim(), userEmail, booking_id);
+      if (!recorded) {
+        return res.status(409).json({ success: false, code: 'ALREADY_USED', message: 'This coupon has already been used on this account.' });
+      }
+    }
+
     const updateSql = `
       UPDATE coupons
       SET times_used = COALESCE(times_used, 0) + 1

@@ -1,5 +1,7 @@
 import express from 'express';
 import { query } from '../db.js';
+import { rejectInvalidIfsc } from '../utils/ifsc.js';
+import { pickCancellations, cancellationRank } from '../utils/bookingStatus.js';
 import { sendBookingStatusEmail, sendRefundNotificationEmail, generateRefundEmailHTML } from '../services/emailService.js';
 
 const router = express.Router();
@@ -112,7 +114,7 @@ const attachBankTag = (baseReason, bankObj) => {
  * POST /api/cancellations
  * Submit a new cancellation request into PostgreSQL
  */
-router.post('/', async (req, res) => {
+router.post('/', rejectInvalidIfsc, async (req, res) => {
   const {
     id,
     booking_id,
@@ -226,6 +228,23 @@ router.post('/', async (req, res) => {
 
   try {
     await ensureTableExists();
+
+    // One cancellation per booking: a repeat click or second tab gets the existing request back
+    const existingRes = await query('SELECT * FROM cancellations');
+    const [existingRow] = pickCancellations((existingRes?.rows || []).filter(
+      c => String(c.booking_id || '').trim().toLowerCase() === finalBookingId.toLowerCase()
+    ));
+    const incomingRank = cancellationRank({ status: finalStatus });
+    if (existingRow && cancellationRank(existingRow) >= incomingRank && cancellationRank(existingRow) > 0) {
+      const existing = extractBankDetails(existingRow);
+      return res.json({
+        success: true,
+        alreadyExists: true,
+        message: 'A cancellation request already exists for this booking.',
+        cancellation: existing,
+        data: existing
+      });
+    }
 
     const insertCancellationsSql = `
       INSERT INTO cancellations (
@@ -427,8 +446,8 @@ router.put('/:id/refund-payout', async (req, res) => {
     // Also synchronize corresponding record in bookings table if present
     try {
       await query(
-        'UPDATE bookings SET refund_status = $1, refund_txn_id = $2, status = \'cancelled\' WHERE id = $3 OR booking_id = $3 OR payment_id = $3',
-        [cleanRefundStatus, cleanTxnId, id]
+        'UPDATE bookings SET status = $1 WHERE id = $2 OR booking_id = $2 OR payment_id = $2',
+        ['cancelled', id]
       );
     } catch (_) {}
 
@@ -520,7 +539,7 @@ router.post('/send-test-refund-email', async (req, res) => {
  * PUT /api/cancellations/:id/bank-details
  * Save or update user bank refund details in database
  */
-router.put('/:id/bank-details', async (req, res) => {
+router.put('/:id/bank-details', rejectInvalidIfsc, async (req, res) => {
   const { id } = req.params;
   const {
     bank_name,
@@ -592,7 +611,7 @@ router.get('/', async (req, res) => {
   try {
     await ensureTableExists();
     const res1 = await query('SELECT * FROM cancellations ORDER BY created_at DESC');
-    const parsedRows = (res1.rows || []).map(extractBankDetails);
+    const parsedRows = pickCancellations(res1.rows || []).map(extractBankDetails);
 
     return res.json({
       success: true,
@@ -602,7 +621,7 @@ router.get('/', async (req, res) => {
     });
   } catch (error) {
     console.error('Fetch cancellations error:', error);
-    return res.json({ success: true, count: 0, cancellations: [], data: [] });
+    return res.status(503).json({ success: false, count: 0, cancellations: [], data: [], message: 'Could not load cancellations.' });
   }
 });
 
@@ -615,11 +634,12 @@ router.get('/user/:email', async (req, res) => {
   try {
     await ensureTableExists();
     const result = await query('SELECT * FROM cancellations WHERE LOWER(user_email) = LOWER($1) ORDER BY created_at DESC', [email]);
-    const parsedRows = (result && result.rows) ? result.rows.map(extractBankDetails) : [];
+    const cleanEmail = String(email || '').trim().toLowerCase();
+    const parsedRows = pickCancellations((result?.rows || []).filter(c => String(c.user_email || '').trim().toLowerCase() === cleanEmail)).map(extractBankDetails);
     return res.json({ success: true, count: parsedRows.length, cancellations: parsedRows });
   } catch (error) {
     console.error('Fetch user cancellations error:', error);
-    return res.json({ success: true, count: 0, cancellations: [] });
+    return res.status(503).json({ success: false, count: 0, cancellations: [], message: 'Could not load cancellations.' });
   }
 });
 

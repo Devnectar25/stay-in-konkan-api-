@@ -15,6 +15,8 @@ export const normalizeBookingStatus = (b) => {
   };
 };
 
+import { withBookingStatus } from '../utils/bookingStatus.js';
+
 const router = express.Router();
 
 let isBookingsTableChecked = false;
@@ -352,12 +354,12 @@ router.get('/user/:userEmail', async (req, res) => {
       ORDER BY created_at DESC;
     `;
     const result = await query(rawSql, [cleanParam]);
-    const cleanRows = (result?.rows || []).map(normalizeBookingStatus);
+    const cleanRows = await withBookingStatus(result?.rows || []);
 
     return res.json({ success: true, count: cleanRows.length, bookings: cleanRows });
   } catch (error) {
     console.error('Fetch user bookings error:', error);
-    return res.json({ success: true, count: 0, bookings: [] });
+    return res.status(503).json({ success: false, count: 0, bookings: [], message: 'Could not load bookings.' });
   }
 });
 
@@ -376,12 +378,12 @@ router.get('/host/:hostEmail', async (req, res) => {
       ORDER BY created_at DESC;
     `;
     const result = await query(rawSql, [hostEmail]);
-    const cleanRows = (result?.rows || []).map(normalizeBookingStatus);
+    const cleanRows = await withBookingStatus(result?.rows || []);
 
     return res.json({ success: true, count: cleanRows.length, bookings: cleanRows });
   } catch (error) {
     console.error('Fetch host bookings error:', error);
-    return res.json({ success: true, count: 0, bookings: [] });
+    return res.status(503).json({ success: false, count: 0, bookings: [], message: 'Could not load bookings.' });
   }
 });
 
@@ -397,11 +399,11 @@ router.get('/all', async (req, res) => {
       ORDER BY created_at DESC;
     `;
     const result = await query(rawSql);
-    const cleanRows = (result?.rows || []).map(normalizeBookingStatus);
+    const cleanRows = await withBookingStatus(result?.rows || []);
     return res.json({ success: true, count: cleanRows.length, bookings: cleanRows });
   } catch (error) {
     console.error('Fetch all bookings error:', error);
-    return res.json({ success: true, count: 0, bookings: [] });
+    return res.status(503).json({ success: false, count: 0, bookings: [], message: 'Could not load bookings.' });
   }
 });
 
@@ -411,7 +413,7 @@ router.get('/all', async (req, res) => {
  */
 router.put('/:id/status', async (req, res) => {
   const { id } = req.params;
-  const { status } = req.body;
+  const { status, actor } = req.body;
 
   if (!status) {
     return res.status(400).json({ success: false, message: 'Status is required.' });
@@ -524,7 +526,15 @@ router.put('/:id/status', async (req, res) => {
     }
 
     // If status is updated to cancelled, check and auto-create cancellation records
-    if (status === 'cancelled') {
+    // An admin restoring a booking closes any open cancellation for it
+    if (actor === 'admin' && ['confirmed', 'pending', 'completed'].includes(String(status).toLowerCase().trim())) {
+      await query(
+        'UPDATE cancellations SET status = $1 WHERE id = $2 OR booking_id = $2 OR id = $3 OR booking_id = $3',
+        ['rejected', id, updatedBooking?.booking_id || id]
+      ).catch((restoreErr) => console.warn('Restore booking note:', restoreErr.message));
+    }
+
+    if (status === 'cancelled' && actor === 'admin') {
       try {
         const bookingRes = await query(
           'SELECT * FROM bookings WHERE id = $1 OR booking_id = $1 OR payment_id = $1',
@@ -535,43 +545,23 @@ router.put('/:id/status', async (req, res) => {
           const bookingId = booking.booking_id || booking.id;
 
           // Check if cancellation already exists
-          const cancelRes = await query(
-            'SELECT * FROM cancellations WHERE booking_id = $1 OR id = $2',
-            [bookingId, booking.id]
-          );
+          const cancelRes = await query('SELECT * FROM cancellations');
 
-          if (!cancelRes || !cancelRes.rows || cancelRes.rows.length === 0) {
+          const openRows = (cancelRes?.rows || []).filter(c =>
+            String(c.booking_id || '').toLowerCase() === String(bookingId).toLowerCase() &&
+            String(c.status || '').toLowerCase() !== 'rejected'
+          );
+          if (openRows.length === 0) {
             const cncId = `CNC-${Math.floor(100000 + Math.random() * 900000)}`;
             const paidAmount = parseFloat(booking.paid_amount || booking.total_price || booking.price || 0);
             const hostRefundPct = 80;
             const hostRefundAmt = Math.round(paidAmount * 0.80);
 
-            // Insert into cancel_bookings
-            await query(
-              `INSERT INTO cancel_bookings (
-                id, booking_id, user_email, user_name, property_name, check_in, check_out, paid_amount, refund_amount, refund_percentage, cancellation_reason, status, refund_status, created_at, updated_at
-              ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'pending', NOW(), NOW())`,
-              [
-                cncId,
-                bookingId,
-                booking.user_email || 'guest@example.com',
-                booking.user_name || 'Guest User',
-                booking.property_name || 'Konkan Homestay',
-                booking.check_in || '',
-                booking.check_out || '',
-                paidAmount,
-                hostRefundAmt,
-                hostRefundPct,
-                'Cancelled by Host (80% Refund Policy)',
-                'approved'
-              ]
-            );
-
             // Insert into cancellations
             await query(
               `INSERT INTO cancellations (
-                id, booking_id, user_email, user_name, property_name, check_in, check_out, paid_amount, refund_amount, refund_percentage, cancellation_reason, status, refund_status, created_at
-              ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'pending', NOW())
+                id, booking_id, user_email, user_name, property_name, check_in, check_out, paid_amount, refund_amount, refund_percentage, notice_days, cancellation_reason, status, refund_status, created_at
+              ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'pending', NOW())
               ON CONFLICT (id) DO UPDATE SET status = EXCLUDED.status, refund_amount = EXCLUDED.refund_amount`,
               [
                 cncId,
@@ -584,7 +574,8 @@ router.put('/:id/status', async (req, res) => {
                 paidAmount,
                 hostRefundAmt,
                 hostRefundPct,
-                'Cancelled by Host (80% Refund Policy)',
+                0,
+                'Cancelled by Admin (80% Refund Policy)',
                 'approved'
               ]
             );
